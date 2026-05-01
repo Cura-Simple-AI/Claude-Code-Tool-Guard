@@ -22,7 +22,7 @@ assert_classify() {
   local desc="$1" claude="$2" args="$3" expected="$4"
   local out
   # shellcheck disable=SC2086
-  out=$(cd "$EXAMPLES_DIR" && GIT_TG_DRYRUN=1 GIT_TG_FAKE_CLAUDE="$claude" \
+  out=$(cd "$EXAMPLES_DIR" && TG_TEST_MODE=1 GIT_TG_DRYRUN=1 GIT_TG_FAKE_CLAUDE="$claude" \
         python3 "$GIT_WRAPPER" $args 2>&1) || true
   if echo "$out" | grep -q "classify=$expected"; then
     pass "$desc → $expected"

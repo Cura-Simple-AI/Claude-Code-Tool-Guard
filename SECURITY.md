@@ -74,11 +74,6 @@ Once we hit 1.0, semantic versioning applies strictly.
 
 ## Known limitations
 
-- **Recursion sentinel can be set externally.** Setting
-  `_<TOOL>_TG_ACTIVE=1` in the environment causes the tool guard to
-  exec the real binary directly without consulting policy. This is
-  intended for the tool guard itself to defend against re-entry, but it
-  doubles as an opt-out. Documented; not a bug.
 - **Bypass via real binary.** A `deny` decision can be bypassed
   only by invoking the real binary directly (e.g. `/usr/bin/az`),
   which sidesteps the wrapper via PATH. That produces no audit-log
@@ -87,6 +82,31 @@ Once we hit 1.0, semantic versioning applies strictly.
   walks `/proc/<pid>/status` and `cmdline`, which is Linux-only and
   can be spoofed by renaming the parent process. This is a heuristic,
   not a security boundary.
+- **User-facing config-override env vars** are **not** policy bypasses
+  but they ARE the user's choice of policy file. If you don't want
+  Claude (or any process) to be able to substitute a different policy,
+  add these to your CLI tool's per-call deny list (e.g. Claude Code's
+  `.claude/settings.json` deny):
+  - `TOOL_GUARD_DIR=/path` — explicit `.tool-guard/` directory override
+  - `<TOOL>_TG_CONFIG=/path` — single-file config override (replaces all layers)
+  - `<TOOL>_TG_LOG_DIR=/path` — log directory override
+  - `<TOOL>_TG_REAL_BIN=/path` — real-binary path override
+  - `<TOOL>_TG_NONINTERACTIVE=1` — force non-TTY (auto-deny prompts)
+  Treating these as legitimate user overrides is the design choice;
+  document them in your team's environment-policy review.
+
+## Test-only env vars (gated behind `TG_TEST_MODE=1`)
+
+The following env vars are honored ONLY when `TG_TEST_MODE=1` is also
+set. Production wrappers never set `TG_TEST_MODE`, so these have no
+effect outside the test suite:
+
+- `TOOL_GUARD_ENGINE_DIR=/path` — substitute the engine. Without the
+  gate this would allow arbitrary Python code execution by pointing
+  at an attacker-controlled `tool_guard.py`.
+- `<TOOL>_TG_FAKE_CLAUDE=0|1` — force the `_is_claude_ancestor()` result.
+  Without the gate, `=0` would silently disable all `claude_only` warn
+  rules from any process able to set the env var.
 - **JSONL log writes are not atomic across concurrent invocations.**
   Two simultaneous tool guard calls can interleave bytes if their
   serialised events exceed the OS pipe-buffer size (rare in practice

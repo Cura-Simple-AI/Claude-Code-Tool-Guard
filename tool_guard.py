@@ -116,8 +116,11 @@ def _is_claude_ancestor(tool_name: str | None = None) -> bool:
 
     Test hook: <TOOL>_TG_FAKE_CLAUDE=1 forces True, =0 forces False —
     useful for unit testing the claude_only branch in both directions.
+    GATED: only honored when TG_TEST_MODE=1 is also set, otherwise
+    ignored (was a P1 bypass — FAKE_CLAUDE=0 silenced all claude_only
+    warn rules from outside the test suite).
     """
-    if tool_name is not None:
+    if tool_name is not None and os.environ.get("TG_TEST_MODE") == "1":
         fake = _env(tool_name, "FAKE_CLAUDE")
         if fake == "1":
             return True

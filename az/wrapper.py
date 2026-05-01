@@ -22,11 +22,13 @@ REAL = os.environ.get("AZ_TG_REAL_BIN", "/usr/bin/az")
 # created a bypass vector. Engine always runs policy now; recursion
 # cost is ~1ms (well below noise) and most CLIs don't self-invoke.
 
-# Locate engine. TOOL_GUARD_ENGINE_DIR (single dir) overrides if set —
-# useful for tests and for pointing at a checked-out engine. Otherwise:
-# installed location first, then source-relative for dev.
+# Locate engine. TOOL_GUARD_ENGINE_DIR is honored ONLY when TG_TEST_MODE=1
+# is also set (P1 finding: an unguarded override would let an attacker
+# substitute their own engine and execute arbitrary Python). Production
+# never sets TG_TEST_MODE; tests do.
+_test_mode = os.environ.get("TG_TEST_MODE") == "1"
 _engine_dirs = ([os.environ["TOOL_GUARD_ENGINE_DIR"]]
-                if os.environ.get("TOOL_GUARD_ENGINE_DIR")
+                if (_test_mode and os.environ.get("TOOL_GUARD_ENGINE_DIR"))
                 else ["/usr/local/lib/tool-guard",
                       os.path.dirname(os.path.dirname(os.path.abspath(__file__)))])
 for _cand in _engine_dirs:

@@ -30,7 +30,7 @@ assert_classify() {
   local desc="$1" claude="$2" args="$3" expected="$4"
   local out
   # shellcheck disable=SC2086
-  out=$(cd "$EXAMPLES_DIR" && GH_TG_DRYRUN=1 GH_TG_FAKE_CLAUDE="$claude" \
+  out=$(cd "$EXAMPLES_DIR" && TG_TEST_MODE=1 GH_TG_DRYRUN=1 GH_TG_FAKE_CLAUDE="$claude" \
         python3 "$GH_WRAPPER" $args 2>&1) || true
   if echo "$out" | grep -q "classify=$expected"; then
     pass "$desc → $expected"
@@ -43,7 +43,7 @@ assert_classify() {
 assert_body_classify() {
   local desc="$1" body="$2" expected="$3"
   local out
-  out=$(cd "$EXAMPLES_DIR" && GH_TG_DRYRUN=1 GH_TG_FAKE_CLAUDE=0 \
+  out=$(cd "$EXAMPLES_DIR" && TG_TEST_MODE=1 GH_TG_DRYRUN=1 GH_TG_FAKE_CLAUDE=0 \
         python3 "$GH_WRAPPER" pr create --title test --body "$body" 2>&1) || true
   if echo "$out" | grep -q "classify=$expected"; then
     pass "$desc → $expected"
@@ -100,25 +100,25 @@ assert_body_classify "body 'fix #4' (lowercase)"   "fix #4"                     
 echo ""
 echo "── PR-body autoclose: alternate forms (--body=, -b shorthand, pr edit) ──"
 # --body=value form (no space)
-out=$(cd "$EXAMPLES_DIR" && GH_TG_DRYRUN=1 GH_TG_FAKE_CLAUDE=0 \
+out=$(cd "$EXAMPLES_DIR" && TG_TEST_MODE=1 GH_TG_DRYRUN=1 GH_TG_FAKE_CLAUDE=0 \
       python3 "$GH_WRAPPER" pr create --title test "--body=Fixes #1234" 2>&1) || true
 if echo "$out" | grep -q 'classify=warn'; then pass "--body=value form caught"
 else fail "--body=value not caught" "got: $(echo "$out" | head -1)"; fi
 
 # -b shorthand
-out=$(cd "$EXAMPLES_DIR" && GH_TG_DRYRUN=1 GH_TG_FAKE_CLAUDE=0 \
+out=$(cd "$EXAMPLES_DIR" && TG_TEST_MODE=1 GH_TG_DRYRUN=1 GH_TG_FAKE_CLAUDE=0 \
       python3 "$GH_WRAPPER" pr create --title test -b "Closes #5" 2>&1) || true
 if echo "$out" | grep -q 'classify=warn'; then pass "-b shorthand caught"
 else fail "-b shorthand not caught" "got: $(echo "$out" | head -1)"; fi
 
 # pr edit (different verb)
-out=$(cd "$EXAMPLES_DIR" && GH_TG_DRYRUN=1 GH_TG_FAKE_CLAUDE=0 \
+out=$(cd "$EXAMPLES_DIR" && TG_TEST_MODE=1 GH_TG_DRYRUN=1 GH_TG_FAKE_CLAUDE=0 \
       python3 "$GH_WRAPPER" pr edit 123 --body "Fixes #1" 2>&1) || true
 if echo "$out" | grep -q 'classify=warn'; then pass "pr edit --body caught"
 else fail "pr edit --body not caught"; fi
 
 # pr edit with --body= form
-out=$(cd "$EXAMPLES_DIR" && GH_TG_DRYRUN=1 GH_TG_FAKE_CLAUDE=0 \
+out=$(cd "$EXAMPLES_DIR" && TG_TEST_MODE=1 GH_TG_DRYRUN=1 GH_TG_FAKE_CLAUDE=0 \
       python3 "$GH_WRAPPER" pr edit 123 "--body=Fixes #1" 2>&1) || true
 if echo "$out" | grep -q 'classify=warn'; then pass "pr edit --body= form caught"
 else fail "pr edit --body= form not caught"; fi
@@ -126,12 +126,12 @@ else fail "pr edit --body= form not caught"; fi
 echo ""
 echo "── False-positive avoidance: issue body should NOT trigger autoclose check ──"
 # issue create / edit / comment with same keywords — issues don't auto-close at PR-merge
-out=$(cd "$EXAMPLES_DIR" && GH_TG_DRYRUN=1 GH_TG_FAKE_CLAUDE=0 \
+out=$(cd "$EXAMPLES_DIR" && TG_TEST_MODE=1 GH_TG_DRYRUN=1 GH_TG_FAKE_CLAUDE=0 \
       python3 "$GH_WRAPPER" issue create --title test --body "Fixes #1" 2>&1) || true
 if echo "$out" | grep -q 'classify=allow'; then pass "issue create --body 'Fixes #N' allowed (no PR-merge auto-close on issue body)"
 else fail "issue create false positive" "got: $(echo "$out" | head -1)"; fi
 
-out=$(cd "$EXAMPLES_DIR" && GH_TG_DRYRUN=1 GH_TG_FAKE_CLAUDE=0 \
+out=$(cd "$EXAMPLES_DIR" && TG_TEST_MODE=1 GH_TG_DRYRUN=1 GH_TG_FAKE_CLAUDE=0 \
       python3 "$GH_WRAPPER" issue comment 1 --body "Closes #5" 2>&1) || true
 if echo "$out" | grep -q 'classify=allow'; then pass "issue comment --body allowed (not a PR)"
 else fail "issue comment false positive"; fi
@@ -140,7 +140,7 @@ echo ""
 echo "── Trailing-wildcard collision avoidance ──"
 # These hypothetical 'verb-suffix' commands shouldn't be denied
 for cmd in "repo delete-tag foo" "secret delete-something" "auth logout-helper" "release delete-asset 1"; do
-  out=$(cd "$EXAMPLES_DIR" && GH_TG_DRYRUN=1 GH_TG_FAKE_CLAUDE=0 \
+  out=$(cd "$EXAMPLES_DIR" && TG_TEST_MODE=1 GH_TG_DRYRUN=1 GH_TG_FAKE_CLAUDE=0 \
         python3 "$GH_WRAPPER" $cmd 2>&1) || true
   if echo "$out" | grep -q 'classify=allow'; then pass "'$cmd' → allow (no false-positive deny)"
   else fail "'$cmd' false positive deny" "got: $(echo "$out" | head -1)"; fi
@@ -174,7 +174,7 @@ echo "── stub: fail-fast when tool_guard engine is missing ──"
 STUB_TMP=$(mktemp -d)
 mkdir -p "$STUB_TMP/gh"
 cp "$GH_WRAPPER" "$STUB_TMP/gh/wrapper.py"
-out=$(cd "$STUB_TMP" && TOOL_GUARD_ENGINE_DIR=/nonexistent \
+out=$(cd "$STUB_TMP" && TG_TEST_MODE=1 TOOL_GUARD_ENGINE_DIR=/nonexistent \
       GH_TG_REAL_BIN=/bin/echo \
       python3 gh/wrapper.py auth status 2>&1)
 ec=$?

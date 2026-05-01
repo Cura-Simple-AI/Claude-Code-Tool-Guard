@@ -27,7 +27,7 @@ assert_classify() {
   local desc="$1" args="$2" expected="$3"
   local out
   # shellcheck disable=SC2086
-  out=$(cd "$EXAMPLES_DIR" && AZ_TG_DRYRUN=1 AZ_TG_FAKE_CLAUDE=0 \
+  out=$(cd "$EXAMPLES_DIR" && TG_TEST_MODE=1 AZ_TG_DRYRUN=1 AZ_TG_FAKE_CLAUDE=0 \
         python3 "$AZ_WRAPPER" $args 2>&1) || true
   if echo "$out" | grep -q "classify=$expected"; then
     pass "$desc → $expected"
@@ -76,7 +76,7 @@ echo "── stub: fail-fast when tool_guard engine is missing ──"
 STUB_TMP=$(mktemp -d)
 mkdir -p "$STUB_TMP/az"
 cp "$AZ_WRAPPER" "$STUB_TMP/az/wrapper.py"
-out=$(cd "$STUB_TMP" && TOOL_GUARD_ENGINE_DIR=/nonexistent \
+out=$(cd "$STUB_TMP" && TG_TEST_MODE=1 TOOL_GUARD_ENGINE_DIR=/nonexistent \
       AZ_TG_REAL_BIN=/bin/echo \
       python3 az/wrapper.py version 2>&1)
 ec=$?

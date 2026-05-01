@@ -13,8 +13,9 @@ REAL = os.environ.get("GH_TG_REAL_BIN", "/usr/bin/gh")
 
 # Recursion shortcut removed (security review P1). See az/wrapper.py.
 
+_test_mode = os.environ.get("TG_TEST_MODE") == "1"
 _engine_dirs = ([os.environ["TOOL_GUARD_ENGINE_DIR"]]
-                if os.environ.get("TOOL_GUARD_ENGINE_DIR")
+                if (_test_mode and os.environ.get("TOOL_GUARD_ENGINE_DIR"))
                 else ["/usr/local/lib/tool-guard",
                       os.path.dirname(os.path.dirname(os.path.abspath(__file__)))])
 for _cand in _engine_dirs:

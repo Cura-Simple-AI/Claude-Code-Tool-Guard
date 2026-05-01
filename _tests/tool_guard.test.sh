@@ -69,6 +69,7 @@ tt() {
   done
   shift  # drop --
   ( cd "$WORK_DIR" && env \
+      TG_TEST_MODE=1 \
       TOOL_GUARD_ENGINE_DIR="$ENGINE_DIR" \
       TESTTOOL_TG_NONINTERACTIVE=1 \
       TESTTOOL_TG_FAKE_CLAUDE=0 \
@@ -1383,6 +1384,102 @@ else
   fail "sentinel bypass" "no log file written"
 fi
 rm -rf "$LOG_DIR"
+
+# ─── 32. SECURITY: FAKE_CLAUDE gated behind TG_TEST_MODE (P1 #3) ─────
+echo ""
+echo "── 32. SECURITY: FAKE_CLAUDE only honored under TG_TEST_MODE=1 ──"
+clear_configs
+write_config '{"defaultMode":"deny","allow":[],"warn":[{"pattern":"x*","claude_only":true,"message":"warn"}],"deny":[]}'
+
+# Get the real ancestor outcome so we can compare against it (this
+# test runs under whatever process spawned bash — could be a CI
+# runner, could be Claude, could be a plain shell). The key claim:
+# without TG_TEST_MODE=1, the engine ignores FAKE_CLAUDE entirely
+# and falls back to the real /proc walk. So FAKE_CLAUDE=0 vs =1 must
+# produce identical output.
+out0=$( cd "$WORK_DIR" && env -u TG_TEST_MODE \
+        TOOL_GUARD_ENGINE_DIR="$ENGINE_DIR" \
+        TESTTOOL_TG_NONINTERACTIVE=1 TESTTOOL_TG_DRYRUN=1 \
+        TESTTOOL_TG_FAKE_CLAUDE=0 TESTTOOL_TG_REAL_BIN=/bin/true \
+        python3 "$TESTTOOL" x op 2>&1 )
+out1=$( cd "$WORK_DIR" && env -u TG_TEST_MODE \
+        TOOL_GUARD_ENGINE_DIR="$ENGINE_DIR" \
+        TESTTOOL_TG_NONINTERACTIVE=1 TESTTOOL_TG_DRYRUN=1 \
+        TESTTOOL_TG_FAKE_CLAUDE=1 TESTTOOL_TG_REAL_BIN=/bin/true \
+        python3 "$TESTTOOL" x op 2>&1 )
+# Without TG_TEST_MODE, both should produce the SAME under_claude value
+# (whatever the real ancestor check returns), proving FAKE_CLAUDE was
+# ignored.
+real0=$(echo "$out0" | grep -oE "under_claude=(True|False)" || echo "missing")
+real1=$(echo "$out1" | grep -oE "under_claude=(True|False)" || echo "missing")
+if [[ "$real0" == "$real1" && -n "$real0" && "$real0" != "missing" ]]; then
+  pass "FAKE_CLAUDE ignored without TG_TEST_MODE (real ancestor=$real0 in both)"
+else
+  fail "FAKE_CLAUDE not gated" "FAKE=0 → $real0 vs FAKE=1 → $real1"
+fi
+
+# WITH TG_TEST_MODE=1, FAKE_CLAUDE=0 vs =1 produce DIFFERENT outputs
+out0=$( cd "$WORK_DIR" && env TG_TEST_MODE=1 \
+        TOOL_GUARD_ENGINE_DIR="$ENGINE_DIR" \
+        TESTTOOL_TG_NONINTERACTIVE=1 TESTTOOL_TG_DRYRUN=1 \
+        TESTTOOL_TG_FAKE_CLAUDE=0 TESTTOOL_TG_REAL_BIN=/bin/true \
+        python3 "$TESTTOOL" x op 2>&1 )
+out1=$( cd "$WORK_DIR" && env TG_TEST_MODE=1 \
+        TOOL_GUARD_ENGINE_DIR="$ENGINE_DIR" \
+        TESTTOOL_TG_NONINTERACTIVE=1 TESTTOOL_TG_DRYRUN=1 \
+        TESTTOOL_TG_FAKE_CLAUDE=1 TESTTOOL_TG_REAL_BIN=/bin/true \
+        python3 "$TESTTOOL" x op 2>&1 )
+if echo "$out0" | grep -qF "under_claude=False" && \
+   echo "$out1" | grep -qF "under_claude=True"; then
+  pass "FAKE_CLAUDE honored with TG_TEST_MODE=1 (=0 → False, =1 → True)"
+else
+  fail "FAKE_CLAUDE not honored" "FAKE=0 → $out0 / FAKE=1 → $out1"
+fi
+
+# ─── 33. SECURITY: TOOL_GUARD_ENGINE_DIR gated behind TG_TEST_MODE ───
+echo ""
+echo "── 33. SECURITY: TOOL_GUARD_ENGINE_DIR only honored under TG_TEST_MODE=1 ──"
+# This was THE most dangerous P1 finding from quinn's audit: an
+# attacker setting TOOL_GUARD_ENGINE_DIR=/tmp/evil/ could run arbitrary
+# Python via a fake tool_guard.py with a malicious run() function.
+# Now gated: prod wrappers ignore the env var unless TG_TEST_MODE=1.
+EVIL_TMP=$(mktemp -d)
+cat > "$EVIL_TMP/tool_guard.py" <<'EOF'
+def run(**kwargs):
+    import sys
+    sys.stderr.write("EVIL_ENGINE_RAN\n")
+    return 0
+EOF
+
+# Use the production az wrapper from PKG_ROOT (NOT the testtool stub
+# which is unguarded — testtool is a test fixture).
+AZ_PROD_WRAPPER="$PKG_ROOT/az/wrapper.py"
+
+# Without TG_TEST_MODE, evil engine MUST be ignored. The wrapper falls
+# back to /usr/local/lib/tool-guard/ (or PKG_ROOT/) and uses the real engine.
+out=$( env -u TG_TEST_MODE \
+       TOOL_GUARD_ENGINE_DIR="$EVIL_TMP" \
+       AZ_TG_REAL_BIN=/bin/true \
+       AZ_TG_DRYRUN=1 \
+       python3 "$AZ_PROD_WRAPPER" version 2>&1 )
+if echo "$out" | grep -qF "EVIL_ENGINE_RAN"; then
+  fail "TOOL_GUARD_ENGINE_DIR not gated" "evil engine ran without TG_TEST_MODE: $out"
+else
+  pass "evil engine NOT loaded without TG_TEST_MODE (wrapper used real engine)"
+fi
+
+# WITH TG_TEST_MODE=1, evil engine IS loaded (test isolation works)
+out=$( env \
+       TG_TEST_MODE=1 \
+       TOOL_GUARD_ENGINE_DIR="$EVIL_TMP" \
+       AZ_TG_REAL_BIN=/bin/true \
+       python3 "$AZ_PROD_WRAPPER" version 2>&1 )
+if echo "$out" | grep -qF "EVIL_ENGINE_RAN"; then
+  pass "evil engine IS loaded with TG_TEST_MODE=1 (test isolation preserved)"
+else
+  fail "TG_TEST_MODE=1 didn't honor TOOL_GUARD_ENGINE_DIR" "got: $out"
+fi
+rm -rf "$EVIL_TMP"
 
 # ─── Result ──────────────────────────────────────────────────────────
 echo ""

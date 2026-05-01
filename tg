@@ -742,10 +742,27 @@ tg check {name} <some-command>
 
 
 def cmd_test(_args) -> int:
-    """Run all test suites under _tests/."""
+    """Run all test suites under _tests/. When tg is installed (running
+    from /usr/local/bin/), the _tests/ dir isn't co-located — point the
+    user at the source clone instead of failing opaquely."""
     tests_dir = PKG_ROOT / "_tests"
     if not tests_dir.is_dir():
-        print(_red(f"tg: no _tests/ directory at {tests_dir}"), file=sys.stderr)
+        # Likely running from /usr/local/bin/ (installed mode), where
+        # _tests/ doesn't ship. Point at the source clone if known.
+        if str(PKG_ROOT) == "/usr/local/bin":
+            cache_hint = os.path.expanduser("~/.local/share/tool-guard-source")
+            print(
+                _yellow(
+                    f"tg: tests don't ship with the installed package. To run\n"
+                    f"     them, cd into a source clone of the repo and run\n"
+                    f"     `bash _tests/<suite>.test.sh` or `tg test` from there.\n"
+                    f"     Common cache (if installed via tool-guard-install.sh):\n"
+                    f"       cd {cache_hint} && tg test"
+                ),
+                file=sys.stderr,
+            )
+        else:
+            print(_red(f"tg: no _tests/ directory at {tests_dir}"), file=sys.stderr)
         return 1
     suites = sorted(tests_dir.glob("*.test.sh"))
     if not suites:

@@ -128,24 +128,37 @@ def _discover_guards() -> list[str]:
     return names
 
 
-def _find_guards_dir(start: Path | None = None) -> Path | None:
-    """Locate the .tool-guard/ config dir. Mirrors the engine:
-      1. $TOOL_GUARD_DIR override
-      2. cwd walk-up
-      3. ~/.config/tool-guard/
-      4. ~/.tool-guard/"""
-    explicit = os.environ.get("TOOL_GUARD_DIR")
-    if explicit:
-        p = Path(explicit)
-        return p if p.is_dir() else None
+def _walk_up_for_guards_dir(start: Path | None = None) -> Path | None:
+    """Walk-up search ONLY — no home fallbacks. Use for write operations
+    (init / edit) where the user expects the file to land in their cwd
+    tree, not somewhere unrelated like ~/.config/."""
     p = (start or Path.cwd()).resolve()
     for _ in range(20):
         c = p / ".tool-guard"
         if c.is_dir():
             return c
         if p == p.parent:
-            break
+            return None
         p = p.parent
+    return None
+
+
+def _find_guards_dir(start: Path | None = None) -> Path | None:
+    """Locate the .tool-guard/ config dir. Mirrors the engine:
+      1. $TOOL_GUARD_DIR override
+      2. cwd walk-up
+      3. ~/.config/tool-guard/
+      4. ~/.tool-guard/
+
+    For READ operations (status, log, check, config show). Write
+    operations should use _walk_up_for_guards_dir() instead."""
+    explicit = os.environ.get("TOOL_GUARD_DIR")
+    if explicit:
+        p = Path(explicit)
+        return p if p.is_dir() else None
+    walked = _walk_up_for_guards_dir(start)
+    if walked is not None:
+        return walked
     home = Path.home()
     for fallback in (home / ".config" / "tool-guard", home / ".tool-guard"):
         if fallback.is_dir():
@@ -362,8 +375,9 @@ def _extract(line: str, key: str) -> str:
 
 def cmd_config_edit(args) -> int:
     """Open the shared (or local) config file in $EDITOR. Creates it
-    from the example template if it doesn't exist yet."""
-    cwd_dir = _find_guards_dir()
+    from the example template if it doesn't exist yet. Anchors at
+    cwd (walk-up only) — edit is a write-or-create operation."""
+    cwd_dir = _walk_up_for_guards_dir()
     if cwd_dir is None:
         # Create .tool-guard/ at cwd as a starting point
         cwd_dir = Path.cwd() / ".tool-guard"
@@ -404,8 +418,10 @@ def cmd_config_edit(args) -> int:
 
 
 def cmd_config_init(args) -> int:
-    """Initialize .tool-guard/<tool>.config.json from the example template."""
-    cwd_dir = _find_guards_dir()
+    """Initialize .tool-guard/<tool>.config.json from the example template.
+    Anchors at cwd (walk-up only, no home fallbacks) — init is a write
+    operation that should land where the user is, not at ~/.config/."""
+    cwd_dir = _walk_up_for_guards_dir()
     if cwd_dir is None:
         cwd_dir = Path.cwd() / ".tool-guard"
         cwd_dir.mkdir(parents=True, exist_ok=True)
@@ -754,7 +770,15 @@ def cmd_install(args) -> int:
 
 
 def cmd_uninstall(args) -> int:
-    """Delegate to uninstall.sh."""
+    """Delegate to uninstall.sh. Like cmd_install, needs the source tree."""
+    if _is_installed_mode():
+        cache_hint = os.path.expanduser("~/.local/share/tool-guard-source")
+        print(
+            _red("tg uninstall: needs uninstall.sh from the source tree, but we're "
+                 "running from /usr/local/bin/."), file=sys.stderr)
+        print(f"     Try: bash {cache_hint}/uninstall.sh {' '.join(args.names) or ''}".rstrip(),
+              file=sys.stderr)
+        return 1
     script = PKG_ROOT / "uninstall.sh"
     if not script.is_file():
         print(_red(f"tg: uninstall.sh not found at {script}"), file=sys.stderr)
@@ -858,6 +882,13 @@ _RESERVED_NAMES = {
 
 def cmd_add(args) -> int:
     """Scaffold a new tool-guard: <tool>/wrapper.py + example config."""
+    if _is_installed_mode():
+        print(_red("tg add: needs to write into the source tree (PKG_ROOT/<tool>/wrapper.py + "
+                   "examples/.tool-guard/), but we're running from /usr/local/bin/. "
+                   "Run from a source clone (e.g. ~/.local/share/tool-guard-source/)."),
+              file=sys.stderr)
+        return 1
+
     name = args.tool
     if not name or not name.replace("-", "").isalnum():
         print(_red(f"tg: invalid tool name '{name}' — use only alphanumerics + dashes"), file=sys.stderr)

@@ -449,6 +449,184 @@ rm -rf "$DISC_TMP"
 
 rm -rf "$(dirname "$TG_PYMOD")"
 
+# ─── tg add — scaffold a new tool-guard ──────────────────────────────
+echo ""
+echo "── tg add — scaffold validation ──"
+
+# Build a writable PKG_ROOT (the real one is read-only when run from CI)
+ADD_SANDBOX=$(mktemp -d)
+cp "$TG" "$ADD_SANDBOX/tg"
+chmod +x "$ADD_SANDBOX/tg"
+touch "$ADD_SANDBOX/tool_guard.py"  # sentinel so engine helpers don't error
+
+# Happy path
+out=$("$ADD_SANDBOX/tg" add newtool 2>&1)
+ec=$?
+assert_eq "tg add newtool — exit 0" "0" "$ec"
+[[ -f "$ADD_SANDBOX/newtool/wrapper.py" ]] && pass "tg add — wrote stub" || fail "stub missing"
+[[ -f "$ADD_SANDBOX/newtool/POLICY.md" ]] && pass "tg add — wrote POLICY.md" || fail "POLICY.md missing"
+[[ -f "$ADD_SANDBOX/examples/.tool-guard/newtool.config.json" ]] && pass "tg add — wrote example config" || fail "example config missing"
+
+# Generated stub has python shebang
+sb=$(head -1 "$ADD_SANDBOX/newtool/wrapper.py")
+case "$sb" in
+  '#!/usr/bin/env python3') pass "generated stub has correct shebang" ;;
+  *) fail "generated stub shebang" "got: $sb" ;;
+esac
+
+# Generated example config is valid JSON + has expected fields
+result=$(python3 -c "
+import json
+d = json.load(open('$ADD_SANDBOX/examples/.tool-guard/newtool.config.json'))
+print('OK' if d.get('defaultMode') and 'allow' in d else 'BAD')
+" 2>&1)
+assert_eq "generated example config is valid + has defaultMode + allow" "OK" "$result"
+
+# Refuse if dir already exists
+out=$("$ADD_SANDBOX/tg" add newtool 2>&1)
+ec=$?
+assert_eq "tg add already-exists — exit 1" "1" "$ec"
+assert_contains "already-exists error message" "already exists" "$out"
+
+# Refuse reserved names. Some reserved names contain `_` which trips the
+# alphanumeric validator first — but the goal is just "rejected", with
+# any reason. Both error paths are acceptable.
+for reserved in tg examples _tests __pycache__ tool_guard install uninstall; do
+  out=$("$ADD_SANDBOX/tg" add "$reserved" 2>&1)
+  ec=$?
+  if [[ $ec -eq 1 ]] && echo "$out" | grep -qE "reserved|invalid tool name"; then
+    pass "tg add $reserved — rejected"
+  else
+    fail "tg add $reserved" "ec=$ec out=$out"
+  fi
+done
+
+# Refuse invalid names
+for bad in "" "-foo" "foo-" "foo bar" "foo/bar" "foo.bar"; do
+  out=$("$ADD_SANDBOX/tg" add "$bad" 2>&1)
+  ec=$?
+  if [[ $ec -ne 0 ]]; then
+    pass "tg add '$bad' — rejected"
+  else
+    fail "tg add '$bad'" "should be rejected, got ec=$ec"
+  fi
+done
+
+# Bug R regression: tg add must refuse in installed mode (was crashing
+# with Python traceback when run from /usr/local/bin/tg).
+INSTALLED_PKG=$(mktemp -d)
+cp "$TG" "$INSTALLED_PKG/tg"
+chmod +x "$INSTALLED_PKG/tg"
+out=$(TG_INSTALL_DIR="$INSTALLED_PKG" "$INSTALLED_PKG/tg" add foo 2>&1)
+ec=$?
+assert_eq "tg add in installed mode — clean exit 1" "1" "$ec"
+assert_contains "tg add installed mode — actionable message" "Run from a source clone" "$out"
+if echo "$out" | grep -q "Traceback"; then
+  fail "tg add installed mode" "regressed to Python traceback"
+else
+  pass "tg add installed mode — no Python traceback (was Bug R)"
+fi
+rm -rf "$INSTALLED_PKG"
+
+rm -rf "$ADD_SANDBOX"
+
+# ─── tg uninstall — installed-mode handling ──────────────────────────
+echo ""
+echo "── tg uninstall — installed mode ──"
+
+# Bug S regression: tg uninstall in installed mode previously gave
+# "uninstall.sh not found at /usr/local/bin/uninstall.sh" — confusing
+# (the real uninstall.sh is in the source clone). Should detect mode
+# and point at the cache.
+INSTALLED_PKG=$(mktemp -d)
+cp "$TG" "$INSTALLED_PKG/tg"
+chmod +x "$INSTALLED_PKG/tg"
+out=$(TG_INSTALL_DIR="$INSTALLED_PKG" "$INSTALLED_PKG/tg" uninstall 2>&1)
+ec=$?
+assert_eq "tg uninstall in installed mode — exit 1" "1" "$ec"
+assert_contains "tg uninstall installed mode — points at source clone" "tool-guard-source" "$out"
+rm -rf "$INSTALLED_PKG"
+
+# tg uninstall in source mode — delegates to uninstall.sh (we use a
+# fake uninstall.sh that just records the args; we don't want the test
+# to actually sudo-rm anything).
+UNINSTALL_SANDBOX=$(mktemp -d)
+cp "$TG" "$UNINSTALL_SANDBOX/tg"
+chmod +x "$UNINSTALL_SANDBOX/tg"
+touch "$UNINSTALL_SANDBOX/tool_guard.py"  # source-mode sentinel
+cat > "$UNINSTALL_SANDBOX/uninstall.sh" <<'EOF'
+#!/bin/bash
+echo "FAKE_UNINSTALL_SH:$*"
+EOF
+chmod +x "$UNINSTALL_SANDBOX/uninstall.sh"
+out=$("$UNINSTALL_SANDBOX/tg" uninstall onetool twotool 2>&1)
+assert_contains "tg uninstall delegates to uninstall.sh with names" "FAKE_UNINSTALL_SH:onetool twotool" "$out"
+rm -rf "$UNINSTALL_SANDBOX"
+
+# ─── tg config init ──────────────────────────────────────────────────
+echo ""
+echo "── tg config init ──"
+
+INIT_SANDBOX=$(mktemp -d)
+cp "$TG" "$INIT_SANDBOX/tg"
+chmod +x "$INIT_SANDBOX/tg"
+mkdir -p "$INIT_SANDBOX/examples/.tool-guard"
+cat > "$INIT_SANDBOX/examples/.tool-guard/widget.config.json" <<'EOF'
+{"defaultMode":"prompt","allow":["safe*"],"warn":[],"deny":[]}
+EOF
+
+# Run from a tmp cwd so config init creates a fresh .tool-guard/ there
+INIT_CWD=$(mktemp -d)
+out=$(cd "$INIT_CWD" && "$INIT_SANDBOX/tg" config init widget 2>&1)
+ec=$?
+assert_eq "tg config init — exit 0" "0" "$ec"
+[[ -f "$INIT_CWD/.tool-guard/widget.config.json" ]] && pass "config init — wrote .tool-guard/widget.config.json" || fail "missing config file"
+
+# Refuses on existing without --force
+out=$(cd "$INIT_CWD" && "$INIT_SANDBOX/tg" config init widget 2>&1)
+ec=$?
+assert_eq "tg config init — refuses existing" "1" "$ec"
+assert_contains "config init refusal message" "already exists" "$out"
+
+# --force overwrites
+out=$(cd "$INIT_CWD" && "$INIT_SANDBOX/tg" config init widget --force 2>&1)
+ec=$?
+assert_eq "tg config init --force — exit 0" "0" "$ec"
+
+# Unknown tool
+out=$(cd "$INIT_CWD" && "$INIT_SANDBOX/tg" config init unknownthing 2>&1)
+ec=$?
+assert_eq "tg config init unknown — exit 1" "1" "$ec"
+assert_contains "config init unknown error" "no example template" "$out"
+
+rm -rf "$INIT_SANDBOX" "$INIT_CWD"
+
+# ─── tg config show ──────────────────────────────────────────────────
+echo ""
+echo "── tg config show ──"
+
+# Use the real PKG_ROOT (has the engine for merge), but a tmp cwd with
+# its own .tool-guard/
+SHOW_CWD=$(mktemp -d)
+mkdir -p "$SHOW_CWD/.tool-guard"
+cat > "$SHOW_CWD/.tool-guard/myshow.config.json" <<'EOF'
+{"defaultMode":"deny","allow":["status*"],"warn":[],"deny":[{"pattern":"force-push*","message":"no"}]}
+EOF
+out=$(cd "$SHOW_CWD" && "$TG" config show myshow 2>&1)
+ec=$?
+assert_eq "tg config show — exit 0" "0" "$ec"
+assert_contains "config show — header" "Resolved config for myshow" "$out"
+assert_contains "config show — shows shared layer marker" "shared" "$out"
+assert_contains "config show — includes pattern from config" "status*" "$out"
+assert_contains "config show — includes deny rule" "force-push*" "$out"
+
+# config show with no .tool-guard/ anywhere → fail
+out=$(cd /tmp && TOOL_GUARD_DIR=/nonexistent HOME=/nonexistent "$TG" config show myshow 2>&1)
+ec=$?
+assert_eq "tg config show — no .tool-guard/ exits 1" "1" "$ec"
+assert_contains "config show — clear error" "no .tool-guard" "$out"
+rm -rf "$SHOW_CWD"
+
 # ─── Result ──────────────────────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════════════════════"

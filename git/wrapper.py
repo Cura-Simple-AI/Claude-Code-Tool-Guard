@@ -13,7 +13,10 @@ REAL = os.environ.get("GIT_TG_REAL_BIN", "/usr/bin/git")  # TG_REAL_BIN_DEFAULT
 
 # Recursion shortcut removed (security review P1). See az/wrapper.py.
 
-_test_mode = os.environ.get("TG_TEST_MODE") == "1"
+# Test mode requires BOTH env hint AND sentinel file (sudo-required).
+# See az/wrapper.py for the rationale (quinn round-2 P1 finding).
+_test_mode = (os.environ.get("TG_TEST_MODE") == "1"
+              and os.path.isfile("/etc/tool-guard/test-mode-enabled"))
 _engine_dirs = ([os.environ["TOOL_GUARD_ENGINE_DIR"]]
                 if (_test_mode and os.environ.get("TOOL_GUARD_ENGINE_DIR"))
                 else ["/usr/local/lib/tool-guard",

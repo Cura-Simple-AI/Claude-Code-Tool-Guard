@@ -84,6 +84,19 @@ def _is_installed_mode() -> bool:
     return PKG_ROOT == INSTALL_DIR
 
 
+# Test-mode gate. Mirrors the engine's _test_mode_active() — both env
+# var hint AND sentinel file required (see tool_guard.py for rationale,
+# quinn round-2 P1 finding). TG_INSTALL_DIR + TG_ENGINE_DIR + TG_LOG_DIR
+# remain ungated because they're test-only paths that don't affect
+# policy decisions.
+TG_TEST_MODE_FILE = "/etc/tool-guard/test-mode-enabled"
+
+
+def _test_mode_active() -> bool:
+    return (os.environ.get("TG_TEST_MODE") == "1"
+            and os.path.isfile(TG_TEST_MODE_FILE))
+
+
 def _source_root() -> Path | None:
     """Locate a directory that holds the source layout (<name>/wrapper.py
     subdirs, _tests/, examples/). In source-tree mode that's PKG_ROOT
@@ -146,7 +159,7 @@ def _walk_up_for_guards_dir(start: Path | None = None) -> Path | None:
 
 def _find_guards_dir(start: Path | None = None) -> Path | None:
     """Locate the .tool-guard/ config dir. Mirrors the engine:
-      1. $TOOL_GUARD_DIR override
+      1. $TOOL_GUARD_DIR override (test-mode-gated, see engine docstring)
       2. cwd walk-up
       3. ~/.config/tool-guard/
       4. ~/.tool-guard/
@@ -154,7 +167,7 @@ def _find_guards_dir(start: Path | None = None) -> Path | None:
     For READ operations (status, log, check, config show). Write
     operations should use _walk_up_for_guards_dir() instead."""
     explicit = os.environ.get("TOOL_GUARD_DIR")
-    if explicit:
+    if explicit and _test_mode_active():
         p = Path(explicit)
         return p if p.is_dir() else None
     walked = _walk_up_for_guards_dir(start)
@@ -722,6 +735,11 @@ def _patch_real_bin(stub: Path, tool: str, real: str) -> tuple[bool, str]:
     default_path = f"/usr/bin/{tool}"
     if real == default_path:
         return (False, f"default real_bin {default_path} matches — no patch needed")
+    # Quinn round-2 P2: reject paths containing characters that would
+    # break the embedding into a Python string literal. " is the most
+    # likely culprit (legal in Linux file names); also \ and newlines.
+    if any(c in real for c in ('"', "\\", "\n", "\r")):
+        return (False, f"refusing to patch with real_bin path containing unsafe chars: {real!r}")
     upper = tool.upper().replace("-", "_")
     try:
         text = stub.read_text(encoding="utf-8")
@@ -1025,10 +1043,11 @@ import sys
 TOOL = "{name}"
 REAL = os.environ.get("{upper}_TG_REAL_BIN", "/usr/bin/{name}")  # TG_REAL_BIN_DEFAULT
 
-# Locate engine. TOOL_GUARD_ENGINE_DIR is honored ONLY when TG_TEST_MODE=1
-# is also set (security review P1: an unguarded override would let an
-# attacker substitute their own engine and execute arbitrary Python).
-_test_mode = os.environ.get("TG_TEST_MODE") == "1"
+# Locate engine. TOOL_GUARD_ENGINE_DIR honored only in test mode
+# (env hint + /etc/tool-guard/test-mode-enabled file — quinn round-2
+# P1: env-only gate is bypassable; see az/wrapper.py).
+_test_mode = (os.environ.get("TG_TEST_MODE") == "1"
+              and os.path.isfile("/etc/tool-guard/test-mode-enabled"))
 _engine_dirs = ([os.environ["TOOL_GUARD_ENGINE_DIR"]]
                 if (_test_mode and os.environ.get("TOOL_GUARD_ENGINE_DIR"))
                 else ["/usr/local/lib/tool-guard",

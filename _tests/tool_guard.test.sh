@@ -1255,15 +1255,33 @@ expected="$FAKE_HOME2/.tool-guard"
 assert_eq "~/.tool-guard legacy fallback fires" "$expected" "$result"
 
 # Verify TOOL_GUARD_DIR env var beats walk-up AND home fallback
+# (NOTE: TOOL_GUARD_DIR is now test-mode-gated — quinn round-2 P1 —
+# so requires TG_TEST_MODE=1 + /etc/tool-guard/test-mode-enabled file).
 EXPLICIT_DIR=$(mktemp -d)/somewhere
 mkdir -p "$EXPLICIT_DIR"
-result=$(HOME="$FAKE_HOME" TOOL_GUARD_DIR="$EXPLICIT_DIR" \
+result=$(HOME="$FAKE_HOME" TG_TEST_MODE=1 TOOL_GUARD_DIR="$EXPLICIT_DIR" \
          TOOL_GUARD_ENGINE_DIR="$ENGINE_DIR" python3 -c "
 import sys; sys.path.insert(0, '$ENGINE_DIR')
 from tool_guard import _find_guards_dir
 print(_find_guards_dir())
 ")
-assert_eq "TOOL_GUARD_DIR overrides everything" "$EXPLICIT_DIR" "$result"
+assert_eq "TOOL_GUARD_DIR overrides everything (with TG_TEST_MODE)" "$EXPLICIT_DIR" "$result"
+
+# Without test mode, TOOL_GUARD_DIR is IGNORED — falls through to walk-up
+# (or home fallback). This is the actual P1 fix being verified.
+result=$(HOME="$FAKE_HOME" TOOL_GUARD_DIR="$EXPLICIT_DIR" \
+         TOOL_GUARD_ENGINE_DIR="$ENGINE_DIR" \
+         python3 -c "
+import os, sys; sys.path.insert(0, '$ENGINE_DIR')
+os.chdir('/tmp')
+from tool_guard import _find_guards_dir
+print(_find_guards_dir())
+")
+if [[ "$result" == "$EXPLICIT_DIR" ]]; then
+  fail "TOOL_GUARD_DIR honored without TG_TEST_MODE" "P1 bypass (got $result)"
+else
+  pass "TOOL_GUARD_DIR ignored without TG_TEST_MODE (P1 fix verified)"
+fi
 
 # Verify walk-up still beats home fallback (precedence: explicit > walk > home)
 result=$(HOME="$FAKE_HOME" TOOL_GUARD_ENGINE_DIR="$ENGINE_DIR" python3 -c "
@@ -1276,7 +1294,9 @@ expected="$GUARDS_DIR"
 assert_eq "cwd walk-up wins over ~/.config fallback" "$expected" "$result"
 
 # Verify TOOL_GUARD_DIR pointed at non-existent dir → None (don't silently fall back)
-result=$(TOOL_GUARD_DIR=/nonexistent/path TOOL_GUARD_ENGINE_DIR="$ENGINE_DIR" \
+# Requires test-mode for the override to be honored.
+result=$(TG_TEST_MODE=1 TOOL_GUARD_DIR=/nonexistent/path \
+         TOOL_GUARD_ENGINE_DIR="$ENGINE_DIR" \
          python3 -c "
 import sys; sys.path.insert(0, '$ENGINE_DIR')
 from tool_guard import _find_guards_dir
@@ -1447,6 +1467,34 @@ if echo "$out0" | grep -qF "under_claude=False" && \
   pass "FAKE_CLAUDE honored with TG_TEST_MODE=1 (=0 → False, =1 → True)"
 else
   fail "FAKE_CLAUDE not honored" "FAKE=0 → $out0 / FAKE=1 → $out1"
+fi
+
+# Quinn round-2 P1: TG_TEST_MODE=1 alone (without the sentinel file)
+# is NOT enough. _test_mode_active() requires both env+file.
+result=$(TOOL_GUARD_ENGINE_DIR="$ENGINE_DIR" python3 -c "
+import sys, os; sys.path.insert(0, '$ENGINE_DIR')
+os.environ['TG_TEST_MODE'] = '1'
+# Force TG_TEST_MODE_FILE to a path that doesn't exist
+import tool_guard
+tool_guard.TG_TEST_MODE_FILE = '/nonexistent/test-mode-enabled'
+print(tool_guard._test_mode_active())
+" 2>&1)
+assert_eq "_test_mode_active False when sentinel file missing" "False" "$result"
+
+# With env + file present (file is created in test bootstrap)
+result=$(TOOL_GUARD_ENGINE_DIR="$ENGINE_DIR" python3 -c "
+import sys, os; sys.path.insert(0, '$ENGINE_DIR')
+os.environ['TG_TEST_MODE'] = '1'
+import tool_guard
+print(tool_guard._test_mode_active())
+" 2>&1)
+# This test only meaningful if /etc/tool-guard/test-mode-enabled exists
+# (it does in our test environment). If absent, the assertion still
+# documents intent — it'll fail with a clear message guiding setup.
+if [[ -f /etc/tool-guard/test-mode-enabled ]]; then
+  assert_eq "_test_mode_active True with env + file" "True" "$result"
+else
+  echo "  (skipped — /etc/tool-guard/test-mode-enabled not present; sudo touch /etc/tool-guard/test-mode-enabled to enable)"
 fi
 
 # ─── 33. SECURITY: TOOL_GUARD_ENGINE_DIR gated behind TG_TEST_MODE ───

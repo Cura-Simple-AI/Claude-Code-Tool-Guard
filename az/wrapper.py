@@ -25,11 +25,17 @@ REAL = os.environ.get("AZ_TG_REAL_BIN", "/usr/bin/az")  # TG_REAL_BIN_DEFAULT
 # created a bypass vector. Engine always runs policy now; recursion
 # cost is ~1ms (well below noise) and most CLIs don't self-invoke.
 
-# Locate engine. TOOL_GUARD_ENGINE_DIR is honored ONLY when TG_TEST_MODE=1
-# is also set (P1 finding: an unguarded override would let an attacker
-# substitute their own engine and execute arbitrary Python). Production
-# never sets TG_TEST_MODE; tests do.
-_test_mode = os.environ.get("TG_TEST_MODE") == "1"
+# Locate engine. TOOL_GUARD_ENGINE_DIR is honored ONLY when test mode
+# is active. Test mode requires BOTH:
+#   1. TG_TEST_MODE=1 env var (a hint Claude can set), AND
+#   2. The sentinel file /etc/tool-guard/test-mode-enabled (requires
+#      sudo to create — Claude can't add this in passing).
+# Quinn round-2 finding: env-var-only gate is bypassable by any
+# process that can set env. The file gate raises the bar to "process
+# already had sudo at some prior point" — which in real deployments
+# is a sysadmin opt-in, not something Claude does in passing.
+_test_mode = (os.environ.get("TG_TEST_MODE") == "1"
+              and os.path.isfile("/etc/tool-guard/test-mode-enabled"))
 _engine_dirs = ([os.environ["TOOL_GUARD_ENGINE_DIR"]]
                 if (_test_mode and os.environ.get("TOOL_GUARD_ENGINE_DIR"))
                 else ["/usr/local/lib/tool-guard",

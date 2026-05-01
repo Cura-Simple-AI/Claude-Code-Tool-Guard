@@ -95,18 +95,44 @@ Once we hit 1.0, semantic versioning applies strictly.
   Treating these as legitimate user overrides is the design choice;
   document them in your team's environment-policy review.
 
-## Test-only env vars (gated behind `TG_TEST_MODE=1`)
+## Test-mode gate
 
-The following env vars are honored ONLY when `TG_TEST_MODE=1` is also
-set. Production wrappers never set `TG_TEST_MODE`, so these have no
-effect outside the test suite:
+Several env vars (`TOOL_GUARD_ENGINE_DIR`, `TOOL_GUARD_DIR`,
+`<TOOL>_TG_FAKE_CLAUDE`) and the publish-force flag (`TG_PUBLISH_FORCE`)
+would defeat the guard if any process could set them. They are gated
+behind a two-factor check:
+
+1. The corresponding env var is set (`TG_TEST_MODE=1`,
+   `TG_PUBLISH_FORCE=1`), AND
+2. A sentinel file exists at:
+   - `/etc/tool-guard/test-mode-enabled` (for test-mode gates)
+   - `/etc/tool-guard/publish-force-allowed` (for publish force)
+
+The file requires sudo to create, so an AI agent or other unprivileged
+process cannot enable the gate in passing. Sysadmins opt in once via:
+
+```bash
+sudo mkdir -p /etc/tool-guard
+sudo touch /etc/tool-guard/test-mode-enabled       # for running tests
+sudo touch /etc/tool-guard/publish-force-allowed   # for OSS-publish overrides
+```
+
+CI environments that run the test suite must create the test-mode file
+as part of setup. See `.github/workflows/test.yml` for the canonical
+example.
+
+### Gated env vars
 
 - `TOOL_GUARD_ENGINE_DIR=/path` — substitute the engine. Without the
-  gate this would allow arbitrary Python code execution by pointing
-  at an attacker-controlled `tool_guard.py`.
-- `<TOOL>_TG_FAKE_CLAUDE=0|1` — force the `_is_claude_ancestor()` result.
-  Without the gate, `=0` would silently disable all `claude_only` warn
-  rules from any process able to set the env var.
+  gate, would allow arbitrary Python code execution.
+- `TOOL_GUARD_DIR=/path` — substitute the policy config dir. Without
+  the gate, would let any process redirect policy lookup to a
+  permissive config.
+- `<TOOL>_TG_FAKE_CLAUDE=0|1` — force `_is_claude_ancestor()` result.
+  Without the gate, `=0` would silence all `claude_only` warn rules.
+- `TG_PUBLISH_FORCE=1` — bypass `publish.sh`'s branch + dirty-tree
+  guards. Without the gate, would let an AI agent force-push the OSS
+  repo from arbitrary branches with WIP code.
 - **JSONL log writes are not atomic across concurrent invocations.**
   Two simultaneous tool guard calls can interleave bytes if their
   serialised events exceed the OS pipe-buffer size (rare in practice

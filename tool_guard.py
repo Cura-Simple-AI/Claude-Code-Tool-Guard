@@ -109,6 +109,22 @@ def _is_interactive(tool_name: str) -> bool:
         return False
 
 
+# Test-mode gate. Quinn round-2 P1: env-only gating is bypassable by
+# any process that can set env vars (Claude can). The file requirement
+# raises the bar to "process needed sudo at some prior point" — which
+# in real deployments is a sysadmin opt-in, not something an AI agent
+# does in passing. Both must be true:
+#   1. TG_TEST_MODE=1 env var (intent — easy to set, easy to grep for)
+#   2. /etc/tool-guard/test-mode-enabled file exists (capability — sudo)
+TG_TEST_MODE_FILE = "/etc/tool-guard/test-mode-enabled"
+
+
+def _test_mode_active() -> bool:
+    """True iff test mode is enabled. See TG_TEST_MODE_FILE comment."""
+    return (os.environ.get("TG_TEST_MODE") == "1"
+            and os.path.isfile(TG_TEST_MODE_FILE))
+
+
 def _is_claude_ancestor(tool_name: str | None = None) -> bool:
     """Walk /proc upward from current pid; return True if any ancestor's
     cmdline starts with `claude`. Linux-only; returns False on other OSes
@@ -120,7 +136,7 @@ def _is_claude_ancestor(tool_name: str | None = None) -> bool:
     ignored (was a P1 bypass — FAKE_CLAUDE=0 silenced all claude_only
     warn rules from outside the test suite).
     """
-    if tool_name is not None and os.environ.get("TG_TEST_MODE") == "1":
+    if tool_name is not None and _test_mode_active():
         fake = _env(tool_name, "FAKE_CLAUDE")
         if fake == "1":
             return True
@@ -169,7 +185,7 @@ def _get_parent_cmd() -> str | None:
 def _find_guards_dir(start: Path | None = None) -> Path | None:
     """Locate the `.tool-guard/` config dir in priority order:
 
-      1. $TOOL_GUARD_DIR — explicit override (a directory path).
+      1. $TOOL_GUARD_DIR — explicit override (test-mode-gated).
       2. Walk up from `start` (default cwd) looking for `.tool-guard/`.
          Mirrors how git locates `.git/`. Up to 20 levels.
       3. ~/.config/tool-guard/ — XDG-aligned per-user fallback.
@@ -178,9 +194,14 @@ def _find_guards_dir(start: Path | None = None) -> Path | None:
     The fallbacks (3 and 4) matter for invocations from arbitrary cwds,
     e.g. an MCP server running az with cwd=/usr/bin — without them, the
     walk-up reaches / without finding anything and the engine falls
-    back to embedded deny-all. Returns None only if no candidate exists."""
+    back to embedded deny-all. Returns None only if no candidate exists.
+
+    Quinn round-2 P1: TOOL_GUARD_DIR is gated behind test mode. Without
+    the gate, an attacker could redirect policy lookup to a permissive
+    config dir they control. Production paths (walk-up + home fallback)
+    remain unaffected."""
     explicit = os.environ.get("TOOL_GUARD_DIR")
-    if explicit:
+    if explicit and _test_mode_active():
         p = Path(explicit)
         return p if p.is_dir() else None
 

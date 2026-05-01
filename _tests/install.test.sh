@@ -286,7 +286,7 @@ else
         bash "$BOOTSTRAP_SH" az 2>&1)
   ec=$?
   assert_eq "EXPECTED_SHA matches → install proceeds" "0" "$ec"
-  assert_contains "EXPECTED_SHA verified message" "SHA verified" "$out"
+  assert_contains "EXPECTED_SHA verified message" "SHA + working-tree integrity verified" "$out"
   rm -rf "$(dirname "$CACHE2")" "$INSTALL2" "$ENGINE2"
 
   # Test: TOOL_GUARD_EXPECTED_SHA does NOT match → install refused
@@ -325,6 +325,104 @@ else
   fi
   assert_contains "partial-clone error has remediation hint" "rm -rf" "$out"
   rm -rf "$CORRUPT2" "$FIXTURE2_WT" "$(dirname "$FIXTURE2_BARE")"
+
+  # ─── quinn round-2 P1+P2: working-tree integrity + REF validation ─
+  echo ""
+  echo "── bootstrap quinn round-2 hardening ──"
+
+  # Build a fixture, clone, then tamper with a working-tree file
+  # without changing HEAD. SHA check passes, working-tree check fails.
+  FIXTURE_TAMPER_WT=$(mktemp -d)
+  cp -a "$PKG_ROOT"/. "$FIXTURE_TAMPER_WT/"
+  ( cd "$FIXTURE_TAMPER_WT" && git init -q -b main && git add -A \
+    && git -c user.email=test@example.com -c user.name=test commit -q -m "fixture-v2" ) >/dev/null 2>&1
+  TAMPER_SHA=$( cd "$FIXTURE_TAMPER_WT" && git rev-parse HEAD )
+  TAMPER_BARE=$(mktemp -d)/bare.git
+  git clone --bare --quiet "$FIXTURE_TAMPER_WT" "$TAMPER_BARE" 2>&1 | grep -v "^$" || true
+
+  # Clone, then modify a file post-clone (simulating attacker tampering)
+  CACHE_TAMPER=$(mktemp -d)/cache
+  git clone --quiet "$TAMPER_BARE" "$CACHE_TAMPER" 2>&1 | grep -v "^$" || true
+  echo "TAMPERED" > "$CACHE_TAMPER/tg"  # post-clone modification
+
+  out=$(TOOL_GUARD_REPO_URL="$TAMPER_BARE" \
+        TOOL_GUARD_CACHE_DIR="$CACHE_TAMPER" \
+        TOOL_GUARD_EXPECTED_SHA="$TAMPER_SHA" \
+        TG_INSTALL_DIR=$(mktemp -d) \
+        TG_ENGINE_DIR=$(mktemp -d) \
+        bash "$BOOTSTRAP_SH" --no-update az 2>&1)
+  ec=$?
+  if [[ $ec -ne 0 ]]; then
+    pass "working-tree tamper detected (SHA passes but diff fails)"
+  else
+    fail "tampered file not detected" "exit was 0"
+  fi
+  assert_contains "working-tree tamper error" "Working-tree integrity" "$out"
+  rm -rf "$(dirname "$CACHE_TAMPER")" "$(dirname "$TAMPER_BARE")" "$FIXTURE_TAMPER_WT"
+
+  # TOOL_GUARD_REF validation — reject option-injection attempts
+  for bad_ref in '--orphan' '-x' 'main;rm' 'main\$(whoami)'; do
+    out=$(TOOL_GUARD_REPO_URL="dummy" \
+          TOOL_GUARD_CACHE_DIR=$(mktemp -d) \
+          TG_INSTALL_DIR=$(mktemp -d) \
+          TG_ENGINE_DIR=$(mktemp -d) \
+          TOOL_GUARD_REF="$bad_ref" \
+          bash "$BOOTSTRAP_SH" 2>&1)
+    ec=$?
+    if [[ $ec -ne 0 ]] && echo "$out" | grep -qF "invalid characters"; then
+      pass "TOOL_GUARD_REF='$bad_ref' rejected"
+    else
+      fail "TOOL_GUARD_REF='$bad_ref' should be rejected" "ec=$ec"
+    fi
+  done
+fi
+
+# ─── publish.sh quinn round-2: glob in TG_PUBLISH_BRANCHES + force gate ─
+echo ""
+echo "── publish.sh quinn round-2 hardening ──"
+PUBLISH_SH="$(cd "$PKG_ROOT/.." && pwd)/tool-guard-publish.sh"
+if [[ -f "$PUBLISH_SH" ]]; then
+  PUB_TMP2=$(mktemp -d)
+  mkdir -p "$PUB_TMP2/scripts/tool-guard"
+  cp "$PUBLISH_SH" "$PUB_TMP2/scripts/tool-guard-publish.sh"
+  chmod +x "$PUB_TMP2/scripts/tool-guard-publish.sh"
+  echo "test" > "$PUB_TMP2/scripts/tool-guard/file.txt"
+  ( cd "$PUB_TMP2" && git init -q -b main \
+    && git -c user.email=t@e.com -c user.name=t commit --allow-empty -q -m "init" \
+    && git add -A && git -c user.email=t@e.com -c user.name=t commit -q -m "subtree" \
+    && git remote add cctg "https://github.com/Cura-Simple-AI/Claude-Code-Tool-Guard.git" \
+    && git checkout -q -b feature ) >/dev/null 2>&1
+
+  # Glob characters in TG_PUBLISH_BRANCHES → rejected
+  for bad in '*' 'feature*' 'main?'; do
+    out=$(cd "$PUB_TMP2" && TG_PUBLISH_BRANCHES="$bad" bash "$PUB_TMP2/scripts/tool-guard-publish.sh" 2>&1)
+    ec=$?
+    if [[ $ec -ne 0 ]] && echo "$out" | grep -qF "glob characters"; then
+      pass "TG_PUBLISH_BRANCHES='$bad' rejected (glob)"
+    else
+      fail "glob in TG_PUBLISH_BRANCHES not rejected" "ec=$ec out=$(echo "$out" | head -1)"
+    fi
+  done
+
+  # TG_PUBLISH_FORCE without sentinel file → rejected
+  # (file path is hardcoded; we test by setting TG_PUBLISH_FORCE without
+  # /etc/tool-guard/publish-force-allowed existing — assumes test env
+  # doesn't have the file)
+  if [[ ! -f /etc/tool-guard/publish-force-allowed ]]; then
+    out=$(cd "$PUB_TMP2" && TG_PUBLISH_FORCE=1 \
+          TG_PUBLISH_BRANCHES="main" \
+          bash "$PUB_TMP2/scripts/tool-guard-publish.sh" 2>&1)
+    ec=$?
+    if [[ $ec -ne 0 ]] && echo "$out" | grep -qF "publish-force-allowed"; then
+      pass "TG_PUBLISH_FORCE=1 without sentinel file → rejected"
+    else
+      fail "TG_PUBLISH_FORCE without sentinel" "ec=$ec out=$(echo "$out" | head -2)"
+    fi
+  else
+    echo "  (skipped — /etc/tool-guard/publish-force-allowed exists in test env)"
+  fi
+
+  rm -rf "$PUB_TMP2"
 fi
 
 # ─── Pre-install PATH check (Dan P1) ────────────────────────────────

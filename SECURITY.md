@@ -43,8 +43,8 @@ Once we hit 1.0, semantic versioning applies strictly.
   binary receives the full argv. Anything the binary chooses to do
   with those args is unrestricted.
 - **Shell-out protection.** A user (or AI agent) can bypass the
-  tool-guard trivially by:
-  - Running the real binary directly (`/usr/bin/az ...`) — the tool-guard
+  tool guard trivially by:
+  - Running the real binary directly (`/usr/bin/az ...`) — the tool guard
     only intercepts via `PATH` priority.
   - Running via `xargs`, `bash -c`, `eval`, or any subshell that
     constructs the command differently from the way the policy
@@ -59,7 +59,7 @@ Once we hit 1.0, semantic versioning applies strictly.
 
 - A safety net against accidental destructive commands by humans
   (`az group delete` typed without thinking).
-- A guardrail for AI agents that you've told to use the tool-guard but
+- A guardrail for AI agents that you've told to use the tool guard but
   whose internal monologue you can't easily review.
 - Audit logging of who-ran-what across a team's CLI usage.
 
@@ -75,19 +75,20 @@ Once we hit 1.0, semantic versioning applies strictly.
 ## Known limitations
 
 - **Recursion sentinel can be set externally.** Setting
-  `_<TOOL>_TG_ACTIVE=1` in the environment causes the tool-guard to
+  `_<TOOL>_TG_ACTIVE=1` in the environment causes the tool guard to
   exec the real binary directly without consulting policy. This is
-  intended for the tool-guard itself to defend against re-entry, but it
+  intended for the tool guard itself to defend against re-entry, but it
   doubles as an opt-out. Documented; not a bug.
-- **`<TOOL>_TG_FORCE=1` bypasses deny.** Documented escape hatch.
-  If you don't want to allow this, override the env var in your shell
-  profile or container init.
+- **Bypass via real binary.** A `deny` decision can be bypassed
+  only by invoking the real binary directly (e.g. `/usr/bin/az`),
+  which sidesteps the wrapper via PATH. That produces no audit-log
+  entry; the user must know the real binary path.
 - **`/proc`-based Claude detection.** The `claude_only` rule semantic
   walks `/proc/<pid>/status` and `cmdline`, which is Linux-only and
   can be spoofed by renaming the parent process. This is a heuristic,
   not a security boundary.
 - **JSONL log writes are not atomic across concurrent invocations.**
-  Two simultaneous tool-guard calls can interleave bytes if their
+  Two simultaneous tool guard calls can interleave bytes if their
   serialised events exceed the OS pipe-buffer size (rare in practice
   for our event sizes; ~1 KB each). Multi-line entries are theoretically
   possible.

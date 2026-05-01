@@ -186,18 +186,6 @@ assert_stderr "claude_only fires under Claude" "classify=warn" \
 assert_stderr "claude_only skipped not-under-Claude" "classify=allow rule=<defaultMode>" \
   TESTTOOL_TG_DRYRUN=1 TESTTOOL_TG_FAKE_CLAUDE=0 -- risky operation
 
-# ─── 5. Force override ───────────────────────────────────────────────
-echo ""
-echo "── 5. FORCE override ──"
-clear_configs
-write_config '{"defaultMode":"deny","deny":["forbidden*"]}'
-
-assert_stderr "FORCE=1 prints override warning" "FORCE=1 overriding deny" \
-  TESTTOOL_TG_FORCE=1 -- forbidden act
-
-assert_exit "FORCE=1 exits 0 (real_bin ran)" 0 \
-  TESTTOOL_TG_FORCE=1 -- forbidden act
-
 # ─── 6. Recursion sentinel ───────────────────────────────────────────
 echo ""
 echo "── 6. Recursion sentinel ──"

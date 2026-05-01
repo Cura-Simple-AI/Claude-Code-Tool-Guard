@@ -261,8 +261,8 @@ def cmd_check(args) -> int:
     # Tell the user what would happen on a real (non-dryrun) invocation
     print()
     if decision == "deny":
-        print(f"  {_dim('Would exit with code 13. Override:')}")
-        print(f"  {_dim(f'    {env_prefix}_TG_FORCE=1 {cmd_repr}')}")
+        print(f"  {_dim('Would exit with code 13.')}")
+        print(f"  {_dim(f'  To allow: edit .tool-guard/{tool}.config.json')}")
     elif decision == "warn":
         print(f"  {_dim('Would print warning to stderr + execute the real binary.')}")
     elif decision == "allow":

@@ -3,7 +3,7 @@
 #
 # Sleep is a self-contained numeric-validator stub (NOT delegating to
 # tool_guard.py). Tests verify: duration parsing, multi-arg sum,
-# Claude-ancestor branch, FORCE override, defensive parsing of env vars,
+# Claude-ancestor branch, defensive parsing of env vars,
 # missing real_bin handling.
 #
 # Real binary substituted with /bin/true so tests don't actually wait.
@@ -176,16 +176,6 @@ assert_stderr "unit-suffix block message includes total" "90s" \
 # Unparseable args → passes through (real sleep would error, but tool-guard doesn't second-guess)
 assert_exit "sleep --help (unparseable) → passes through" 0 \
   tt_claude 1 SLEEP_TG_MAX=10 SLEEP_TG_REAL_BIN=/bin/true -- --help
-
-# ─── 5. SLEEP_TG_FORCE override ─────────────────────────────────
-echo ""
-echo "── 5. SLEEP_TG_FORCE override ──"
-assert_exit "FORCE=1 bypasses guard even under Claude" 0 \
-  tt_claude 1 SLEEP_TG_FORCE=1 SLEEP_TG_MAX=10 SLEEP_TG_REAL_BIN=/bin/true -- 999
-
-# Without FORCE the same call would block (sanity check the previous test isn't accidentally passing for another reason)
-assert_exit "without FORCE the same call blocks" 1 \
-  tt_claude 1 SLEEP_TG_MAX=10 SLEEP_TG_REAL_BIN=/bin/true -- 999
 
 # ─── 6. Defensive env var handling ───────────────────────────────────
 echo ""

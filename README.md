@@ -5,7 +5,7 @@
 [![Python: 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
 
 > **Generic policy enforcement for CLI tools — built for AI agents
-> like Claude Code.** Drop-in tool-guards for `az`, `git`, `gh`,
+> like Claude Code.** Drop-in tool guards for `az`, `git`, `gh`,
 > `sleep`, … with allow / warn / deny rules, custom messages,
 > structured audit logs, an interactive prompt for unknown commands,
 > and a shared engine that's <600 lines of pure-stdlib Python.
@@ -56,7 +56,7 @@ You can:
 The engine handles config loading, classification, prompt with
 auto-save to local config, redaction of secret-flag values, JSONL
 audit logging, recursion defence, force override, and dry-run mode.
-**Each per-tool tool-guard is ~25 lines** — just declares the tool name,
+**Each per-tool tool guard is ~25 lines** — just declares the tool name,
 real binary path, and any secret flags to redact.
 
 ## Quickstart
@@ -85,15 +85,14 @@ bash /path/to/tool-guard/install.sh
 az group delete --name something
 # → tool-guard: ❌ blocked by policy rule '* delete *'.
 #     Generic destructive '* delete *' is blocked by the global guard rails.
-#     Override (only if you know what you're doing):
-#       AZ_TG_FORCE=1 az group delete --name something
+#     To allow this command: edit .tool-guard/az.config.json
 ```
 
 That's it. Everything below is detail.
 
 ## The `tg` management CLI
 
-`tg` is installed alongside the tool-guards and provides convenient
+`tg` is installed alongside the tool guards and provides convenient
 inspection, dry-run, and management commands:
 
 ```bash
@@ -122,15 +121,15 @@ Checking: az group delete --name foo
                    This is the most blast-radius operation in Azure CLI.
                    Verify the group name twice and confirm with the team.
 
-  Would exit with code 13. Override:
-      AZ_TG_FORCE=1 az group delete --name foo
+  Would exit with code 13.
+    To allow: edit .tool-guard/az.config.json
 ```
 
 This lets you ask "would this be allowed?" without actually running
 the command — useful for documentation, scripts, and AI agents that
 want to pre-check before invoking destructive operations.
 
-## Built-in tool-guard
+## Built-in tool guards
 
 | Tool-guard | Real binary    | defaultMode | Notes                                      |
 |---------|---------------|-------------|--------------------------------------------|
@@ -139,7 +138,7 @@ want to pre-check before invoking destructive operations.
 | `gh`    | `/usr/bin/gh` | `allow`     | Always-deny on credential / resource destruction (`auth logout`, `repo delete`, `secret delete`, `ssh-key delete`, `release delete`). Claude-only warns on `pr merge`, `pr close`, `release create`. **PR-body autoclose check** — warns when `gh pr create --body` contains `Fix(es) #N` / `Close(s) #N` / `Resolve(s) #N` (GitHub auto-closes the linked issue at merge). |
 | `sleep` | `/usr/bin/sleep` | n/a      | Numeric guard (not pattern-matched). Blocks `sleep > 30s` under a Claude Code ancestor; correctly sums multi-arg invocations like `sleep 1m 30s`. Self-contained stub — does NOT use the engine. |
 
-Adding a new tool-guard is ~30 lines + a JSON config — see
+Adding a new tool guard is ~30 lines + a JSON config — see
 [CONTRIBUTING.md](CONTRIBUTING.md#adding-a-new-tool-guard).
 
 ## Configuration model
@@ -219,7 +218,6 @@ For each wrapped tool (prefix = `<TOOL>_WRAPPER_`, e.g. `AZ_WRAPPER_`):
 | Variable                            | Purpose |
 |-------------------------------------|---------|
 | `<TOOL>_TG_REAL_BIN`           | Override the real binary path (e.g. for snap installs) |
-| `<TOOL>_TG_FORCE=1`            | Emergency bypass — ignore deny rules |
 | `<TOOL>_TG_DRYRUN=1`           | Print classification + exit; do not exec |
 | `<TOOL>_TG_DISABLE=1`          | Disable logging (the call still runs) |
 | `<TOOL>_TG_NONINTERACTIVE=1`   | Treat stdin as non-TTY (auto-deny on prompt) |
@@ -238,13 +236,13 @@ scripts/tool-guard/sleep/wrapper.py  →  /usr/local/bin/sleep
 ```
 
 `/usr/local/bin/` precedes `/usr/bin/` on standard Debian/Ubuntu, so
-plain `az` resolves to the tool-guard without touching anyone's shell
+plain `az` resolves to the tool guard without touching anyone's shell
 config. Each stub hard-codes `/usr/bin/<name>` as the real binary
 (overridable via `<TOOL>_TG_REAL_BIN`) to avoid PATH-recursion.
 
 The installer:
 - Refuses to overwrite a binary at `/usr/local/bin/<name>` that's not
-  a Python tool-guard script (so it won't clobber a real CLI someone
+  a Python tool guard script (so it won't clobber a real CLI someone
   installed there manually).
 - Verifies PATH order (`which az` must resolve to `/usr/local/bin/az`).
 - Uses `sudo` for the writes — must be run by a human user.
@@ -259,14 +257,14 @@ bash uninstall.sh       # symmetric removal
 
 ### Does this break my shell?
 
-No. The tool-guard inherits stdin/stdout/stderr transparently and exec's
+No. The tool guard inherits stdin/stdout/stderr transparently and exec's
 the real binary on `allow` (and `warn`, with a stderr notice first).
 Interactive flows like `az login` (browser dance) and `git rebase -i`
 work normally.
 
 ### What's exit 13?
 
-The tool-guard's "blocked by policy" exit code, distinct from 0
+The tool guard's "blocked by policy" exit code, distinct from 0
 (success), 1 (real binary error), and 127 (binary not found).
 
 ### How does `claude_only` work?
@@ -279,23 +277,27 @@ process whose `cmdline` basename is `claude`. If found, rules with
 For tests, set `<TOOL>_TG_FAKE_CLAUDE=0` (force off) or
 `<TOOL>_TG_FAKE_CLAUDE=1` (force on).
 
-### Can I bypass the tool-guard?
+### Can I bypass the tool guard?
 
 Yes — by design. `tool-guard` is a guardrail, not a sandbox. See
 [SECURITY.md](SECURITY.md#what-it-does-not-do) for the threat model.
-Setting `<TOOL>_TG_FORCE=1` is the documented escape hatch for
-emergencies.
+
+To bypass a `deny` for a single emergency call, invoke the real
+binary directly (e.g. `/usr/bin/az group delete …`). That sidesteps
+the wrapper via PATH and produces no audit-log entry. To allow the
+command going forward, edit
+`.tool-guard/<tool>.config.json`.
 
 ### What about `gh` (GitHub CLI)?
 
-Not a built-in tool-guard yet, but the engine handles it the same way —
+Not a built-in tool guard yet, but the engine handles it the same way —
 write a 25-line stub plus a config (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 PRs welcome.
 
 ### What languages does this work for?
 
 Any CLI that's invoked via `PATH` (so any compiled binary or shell
-script). The tool-guard logic itself is Python 3.9+ stdlib.
+script). The tool guard logic itself is Python 3.9+ stdlib.
 
 ## Project status
 
@@ -309,15 +311,15 @@ script). The tool-guard logic itself is Python 3.9+ stdlib.
 
 See [CHANGELOG.md](CHANGELOG.md) for history.
 
-## Per-tool-guard details
+## Per-tool guard details
 
 - [az](az/POLICY.md) — Azure CLI, design notes
-- [git](git/POLICY.md) — git tool-guard, design notes
-- [sleep](sleep/POLICY.md) — sleep tool-guard, design notes
+- [git](git/POLICY.md) — git tool guard, design notes
+- [sleep](sleep/POLICY.md) — sleep tool guard, design notes
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports, new tool-guard PRs,
+See [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports, new tool guard PRs,
 and policy-template improvements are all welcome.
 
 ## License

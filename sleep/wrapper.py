@@ -23,7 +23,6 @@ instead.
 
 Environment variables:
   SLEEP_TG_MAX        max seconds allowed under Claude (default 30)
-  SLEEP_TG_FORCE=1    bypass the guard (emergency override)
   SLEEP_TG_REAL_BIN   override /usr/bin/sleep (e.g. for tests)
   _SLEEP_TG_ACTIVE    internal recursion sentinel
 """
@@ -128,9 +127,6 @@ def main() -> int:
     if not args:
         return _exec_real([])
 
-    if os.environ.get("SLEEP_TG_FORCE") == "1":
-        return _exec_real(args)
-
     secs = sum_durations(args)
     if secs is not None and secs > MAX_SECS and is_claude_ancestor():
         joined = " ".join(args)
@@ -140,8 +136,7 @@ def main() -> int:
         )
         print(
             "  Long sleeps block the entire Claude session — the user cannot talk to Claude\n"
-            "  while a sleep is pending. Use ScheduleWakeup or CronCreate for waits >30s.\n"
-            f"  Override (only if you know what you're doing): SLEEP_TG_FORCE=1 sleep {joined}",
+            "  while a sleep is pending. Use ScheduleWakeup or CronCreate for waits >30s.",
             file=sys.stderr,
         )
         return 1

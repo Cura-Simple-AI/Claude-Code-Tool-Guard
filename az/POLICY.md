@@ -1,12 +1,12 @@
-# az-tool-guard policy — design notes
+# az-tool guard policy — design notes
 
 The `.tool-guard/az.config.json` file controls what `az`
-invocations the tool-guard at `/usr/local/bin/az` allows or blocks.
+invocations the tool guard at `/usr/local/bin/az` allows or blocks.
 **Default posture: deny** — an unmatched call triggers an interactive
 prompt (when stdin is a TTY) or an automatic deny (when it is not, e.g.
 Claude / scripts / CI).
 
-The tool-guard itself is a ~25-line stub that delegates to the shared
+The tool guard itself is a ~25-line stub that delegates to the shared
 engine at `scripts/tool-guard/tool_guard.py`. All policy logic lives
 there — see `scripts/tool-guard/README.md` for the system architecture.
 
@@ -127,7 +127,7 @@ pattern by hand to either config file.
 ### Non-interactive callers
 
 If stdin is not a TTY (Claude, scripts, CI) or
-`AZ_TG_NONINTERACTIVE=1` is set, the tool-guard **denies
+`AZ_TG_NONINTERACTIVE=1` is set, the tool guard **denies
 automatically without prompting** — otherwise it would hang waiting on
 input that never comes. The deny message includes the suggested pattern
 + instructions on which file to edit and how to override.
@@ -214,11 +214,11 @@ union doesn't care).
 
 Once the policy has run for a while and we trust it, the `Bash(az:*)`
 deny in `.claude/settings.json` can be removed. At that point Claude
-calls `az` via the tool-guard, and **the tool-guard's `deny` list +
+calls `az` via the tool guard, and **the tool guard's `deny` list +
 default-deny posture become the authoritative gate** instead of the
 harness's.
 
-Until then, the tool-guard's policy is informational for Claude — Claude's
+Until then, the tool guard's policy is informational for Claude — Claude's
 bash calls to `az` are blocked at the harness layer before they reach
 the tool-guard. Only humans + non-Claude scripts exercise the policy
 today.

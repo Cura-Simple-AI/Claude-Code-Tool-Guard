@@ -1,7 +1,7 @@
-# gh-tool-guard policy — design notes
+# gh tool guard policy — design notes
 
 The `.tool-guard/gh.config.json` file controls what `gh` (GitHub CLI)
-invocations the tool-guard at `/usr/local/bin/gh` blocks (with
+invocations the tool guard at `/usr/local/bin/gh` blocks (with
 `deny`), warns about (with `warn`), or allows silently (with `allow`
 or `defaultMode: "allow"`).
 
@@ -14,7 +14,7 @@ text.
 
 ## Default posture: allow
 
-Like `git`, the `gh` tool-guard uses `defaultMode: "allow"`. The
+Like `git`, the `gh` tool guard uses `defaultMode: "allow"`. The
 overwhelming majority of `gh` invocations are read-only or benign
 mutations (`pr list`, `issue create`, `pr comment`, `auth status`,
 `run view`). Prompting on every unknown verb would be unbearable.
@@ -46,7 +46,7 @@ checklist isn't fully ticked. This is a frequent footgun for teams
 that use the issue body / comments as the source of truth for
 "is this done?".
 
-The tool-guard scans `gh pr create --body <text>` and warns if any of
+The tool guard scans `gh pr create --body <text>` and warns if any of
 these keywords appear with a `#NNN` suffix. The PR is still created
 (this is a `warn` rule, not `deny`); the user can edit the body
 afterwards if they want to break the auto-close link.
@@ -133,14 +133,14 @@ instead.
 Same env vars as the engine:
 
 ```bash
-# Bypass deny once (e.g. emergency repo cleanup):
-GH_TG_FORCE=1 gh repo delete some-old-fork
-
 # Disable logging (debug):
 GH_TG_DISABLE=1 gh auth status
 
 # See what would happen without running:
 GH_TG_DRYRUN=1 gh pr merge 1234
+
+# Emergency bypass: invoke real gh directly (skips the wrapper via PATH)
+/usr/bin/gh repo delete some-old-fork
 
 # Or use the management CLI:
 tg check gh pr create --title "fix x" --body "Fixes #999"

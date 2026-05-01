@@ -1,4 +1,4 @@
-# Extracting tool-guard as a standalone repository
+# Extracting tool guard as a standalone repository
 
 This package was developed as `scripts/tool-guard/` inside a larger
 project. To spin it off as its own GitHub repo (or any standalone
@@ -69,7 +69,7 @@ After extraction, the standalone repo's root looks like this:
 ## What does NOT ship (and why)
 
 The parent repo's actual `.tool-guard/<tool>.config.json` files —
-those are the parent project's policy data, not part of the tool-guard
+those are the parent project's policy data, not part of the tool guard
 package. Users of the standalone repo bring their own configs, using
 `examples/.tool-guard/` as a starting template.
 

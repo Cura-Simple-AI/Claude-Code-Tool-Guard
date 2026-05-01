@@ -40,7 +40,7 @@ and is gitignored. Add this to your `.gitignore`:
 ```
 
 The local file is created automatically when you press `[A]` (allow
-always) or `[D]` (deny always) at the tool-guard's interactive prompt.
+always) or `[D]` (deny always) at the tool guard's interactive prompt.
 
 ## What goes in `_defaults.json`?
 

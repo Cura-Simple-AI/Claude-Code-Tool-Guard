@@ -42,7 +42,8 @@ makes the rule fire only when running under a Claude ancestor process
 
 Environment variables (TOOL = upper(tool_name) with '-' → '_'):
   <TOOL>_TG_REAL_BIN     override the real binary path
-  <TOOL>_TG_FORCE        emergency bypass — ignore deny rules
+  (To bypass a deny in an emergency, invoke the real binary directly,
+   e.g. /usr/bin/az.)
   <TOOL>_TG_DRYRUN       print classification + exit; do not exec
   <TOOL>_TG_DISABLE      disable logging (the call still runs)
   <TOOL>_TG_NONINTERACTIVE  treat stdin as non-TTY (auto-deny on prompt)
@@ -591,8 +592,7 @@ def _print_deny_message(
             " and stdin is not a TTY → denying.\n"
             f"  Suggested pattern: '{derive_pattern(argv)}'\n"
             f"  Add to .tool-guard/{tool_name}.config.json (shared, committed) or\n"
-            f"  .tool-guard/{tool_name}.config.local.json (per-user, gitignored).\n"
-            f"  Override once: {_env_prefix(tool_name)}_TG_FORCE=1 {tool_name} {' '.join(argv)}",
+            f"  .tool-guard/{tool_name}.config.local.json (per-user, gitignored).",
             file=sys.stderr,
         )
         return
@@ -604,8 +604,7 @@ def _print_deny_message(
             "and defaultMode is 'deny' → blocked.\n"
             f"  Suggested allow pattern: '{derive_pattern(argv)}'\n"
             f"  Add to .tool-guard/{tool_name}.config.json (shared, committed) or\n"
-            f"  .tool-guard/{tool_name}.config.local.json (per-user, gitignored).\n"
-            f"  Override once: {_env_prefix(tool_name)}_TG_FORCE=1 {tool_name} {' '.join(argv)}",
+            f"  .tool-guard/{tool_name}.config.local.json (per-user, gitignored).",
             file=sys.stderr,
         )
         return
@@ -617,10 +616,8 @@ def _print_deny_message(
         for line in custom.splitlines():
             print(f"  {line}", file=sys.stderr)
     print(
-        f"  Override (only if you know what you're doing):\n"
-        f"    {_env_prefix(tool_name)}_TG_FORCE=1 {tool_name} {' '.join(argv)}\n"
-        f"  Edit policy at .tool-guard/{tool_name}.config.json or\n"
-        f"  .tool-guard/{tool_name}.config.local.json (per-user, gitignored).",
+        f"  To allow this command: edit .tool-guard/{tool_name}.config.json (shared)\n"
+        f"  or .tool-guard/{tool_name}.config.local.json (per-user, gitignored).",
         file=sys.stderr,
     )
 
@@ -741,15 +738,6 @@ def run(
                 )
         decision = prompted_decision
         matched_rule = {"pattern": "<prompted>"}
-
-    # Emergency bypass for deny.
-    if decision == "deny" and _env(tool_name, "FORCE") == "1":
-        rule_str = matched_rule.get("pattern") if matched_rule else "<unknown>"
-        print(
-            f"{tool_name}-tool-guard: ⚠ {_env_prefix(tool_name)}_TG_FORCE=1 overriding deny on '{rule_str}'",
-            file=sys.stderr,
-        )
-        decision = "allow"
 
     if decision == "deny":
         event = _build_event(

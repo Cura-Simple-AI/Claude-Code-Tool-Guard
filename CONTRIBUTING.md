@@ -1,4 +1,4 @@
-# Contributing to tool-guard
+# Contributing to tool guard
 
 Thanks for your interest in contributing! This is a small Python +
 shell project with a focused scope (CLI policy enforcement) — most
@@ -22,9 +22,9 @@ bash _tests/sleep.test.sh
 
 All 167 tests should pass on a fresh clone.
 
-## Adding a new tool-guard
+## Adding a new tool guard
 
-A new pattern-matched tool tool-guard is ~30 lines of stub code + a JSON
+A new pattern-matched tool tool guard is ~30 lines of stub code + a JSON
 config file + an optional POLICY.md. Walkthrough:
 
 ### 1. Create the stub
@@ -91,7 +91,7 @@ same template as `az.smoke.test.sh` and `git.smoke.test.sh`.
 
 ### 5. Update the docs
 
-- Add the tool to the README's "Built-in tool-guard" table.
+- Add the tool to the README's "Built-in tool guards" table.
 - Add a CHANGELOG entry under `## [Unreleased]`.
 
 ## Code style

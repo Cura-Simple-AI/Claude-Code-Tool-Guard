@@ -5,7 +5,7 @@ take one on.
 
 ## ✅ Completed
 
-### `gh` (GitHub CLI) tool-guard — Phase A done (v0.1.0)
+### `gh` (GitHub CLI) tool guard — Phase A done (v0.1.0)
 
 Phase A shipped: stub + policy + POLICY.md + 46-test smoke suite.
 `defaultMode: "allow"` with deny rules for credential / resource

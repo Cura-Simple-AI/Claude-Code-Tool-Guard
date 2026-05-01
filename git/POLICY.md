@@ -1,7 +1,7 @@
-# git-tool-guard policy — design notes
+# git tool guard policy — design notes
 
 The `.tool-guard/git.config.json` file controls what `git`
-invocations the tool-guard at `/usr/local/bin/git` blocks (with `deny`),
+invocations the tool guard at `/usr/local/bin/git` blocks (with `deny`),
 warns about (with `warn`), or allows silently (with `allow` or
 `defaultMode: "allow"`).
 
@@ -11,7 +11,7 @@ running under a Claude ancestor process.
 
 ## Default posture: allow
 
-Unlike `az`, the git tool-guard uses `defaultMode: "allow"`. Most git
+Unlike `az`, the git tool guard uses `defaultMode: "allow"`. Most git
 commands are safe (status, log, diff, fetch, pull, branch, …) and
 prompting on every unknown verb would be unbearable in interactive use.
 The list of `deny` and `warn` rules is the policy — everything else
@@ -94,19 +94,14 @@ happen by accident.
 Same env vars as the engine:
 
 ```bash
-# Bypass deny once (e.g. emergency hotfix to main):
-GIT_TG_FORCE=1 git push origin main
-
 # Disable logging (debug):
 GIT_TG_DISABLE=1 git status
 
 # See what would happen without running:
 GIT_TG_DRYRUN=1 git push --force origin some-branch
 
-# Pretend we're not running under Claude (useful when the ancestor
-# detection misfires, e.g. a tool-guard script has 'claude' in its name):
-# (no env var — remove the claude_only:true from the rule, or set
-# GIT_TG_FORCE=1)
+# Emergency bypass for a single call (e.g. hotfix to main):
+/usr/bin/git push origin main
 ```
 
 ## Per-user overrides

@@ -14,8 +14,11 @@ if os.environ.get("_GIT_TG_ACTIVE"):
     os.execv(REAL, [REAL] + sys.argv[1:])
 os.environ["_GIT_TG_ACTIVE"] = "1"
 
-for _cand in ("/usr/local/lib/tool-guard",
-              os.path.dirname(os.path.dirname(os.path.abspath(__file__)))):
+_engine_dirs = ([os.environ["TOOL_GUARD_ENGINE_DIR"]]
+                if os.environ.get("TOOL_GUARD_ENGINE_DIR")
+                else ["/usr/local/lib/tool-guard",
+                      os.path.dirname(os.path.dirname(os.path.abspath(__file__)))])
+for _cand in _engine_dirs:
     if os.path.exists(os.path.join(_cand, "tool_guard.py")):
         sys.path.insert(0, _cand)
         break

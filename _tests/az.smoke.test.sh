@@ -69,13 +69,15 @@ assert_classify "* purge *"                 "keyvault key purge --name foo"     
 
 echo ""
 echo "── stub: fail-fast when tool_guard engine is missing ──"
-# Copy stub to a tmp dir without the engine alongside it, no
-# /usr/local/lib/tool-guard/ either (assumed during local test runs).
+# Copy stub to a tmp dir without the engine alongside it. Force the
+# wrapper to look only at /nonexistent (TOOL_GUARD_ENGINE_DIR) so the
+# test isolates from any system install at /usr/local/lib/tool-guard/.
 # Stub should exit 127 with a clear error, NOT a Python traceback.
 STUB_TMP=$(mktemp -d)
 mkdir -p "$STUB_TMP/az"
 cp "$AZ_WRAPPER" "$STUB_TMP/az/wrapper.py"
-out=$(cd "$STUB_TMP" && AZ_TG_REAL_BIN=/bin/echo \
+out=$(cd "$STUB_TMP" && TOOL_GUARD_ENGINE_DIR=/nonexistent \
+      AZ_TG_REAL_BIN=/bin/echo \
       python3 az/wrapper.py version 2>&1)
 ec=$?
 if [[ $ec -eq 127 ]]; then

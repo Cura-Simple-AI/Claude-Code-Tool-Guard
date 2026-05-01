@@ -169,10 +169,13 @@ assert_classify "api repos/foo/bar/pulls"          "0" "api repos/foo/bar/pulls"
 
 echo ""
 echo "── stub: fail-fast when tool_guard engine is missing ──"
+# Force engine lookup to /nonexistent so the test isolates from any
+# system-installed engine at /usr/local/lib/tool-guard/.
 STUB_TMP=$(mktemp -d)
 mkdir -p "$STUB_TMP/gh"
 cp "$GH_WRAPPER" "$STUB_TMP/gh/wrapper.py"
-out=$(cd "$STUB_TMP" && GH_TG_REAL_BIN=/bin/echo \
+out=$(cd "$STUB_TMP" && TOOL_GUARD_ENGINE_DIR=/nonexistent \
+      GH_TG_REAL_BIN=/bin/echo \
       python3 gh/wrapper.py auth status 2>&1)
 ec=$?
 if [[ $ec -eq 127 ]]; then

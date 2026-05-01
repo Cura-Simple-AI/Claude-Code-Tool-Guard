@@ -21,9 +21,14 @@ if os.environ.get("_AZ_TG_ACTIVE"):
     os.execv(REAL, [REAL] + sys.argv[1:])
 os.environ["_AZ_TG_ACTIVE"] = "1"
 
-# Locate engine: installed location first, then source-relative for dev/test.
-for _cand in ("/usr/local/lib/tool-guard",
-              os.path.dirname(os.path.dirname(os.path.abspath(__file__)))):
+# Locate engine. TOOL_GUARD_ENGINE_DIR (single dir) overrides if set —
+# useful for tests and for pointing at a checked-out engine. Otherwise:
+# installed location first, then source-relative for dev.
+_engine_dirs = ([os.environ["TOOL_GUARD_ENGINE_DIR"]]
+                if os.environ.get("TOOL_GUARD_ENGINE_DIR")
+                else ["/usr/local/lib/tool-guard",
+                      os.path.dirname(os.path.dirname(os.path.abspath(__file__)))])
+for _cand in _engine_dirs:
     if os.path.exists(os.path.join(_cand, "tool_guard.py")):
         sys.path.insert(0, _cand)
         break

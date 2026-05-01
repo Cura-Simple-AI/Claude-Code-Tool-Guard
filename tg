@@ -44,9 +44,11 @@ from pathlib import Path
 
 VERSION = "0.1.0"
 
-INSTALL_DIR = Path("/usr/local/bin")
-ENGINE_DIR = Path("/usr/local/lib/tool-guard")
-LOG_DIR_BASE = Path("/tmp/tool-guard-logs")
+# Paths can be overridden via env vars — useful for tests and for
+# users who customised install.sh / uninstall.sh to a different prefix.
+INSTALL_DIR = Path(os.environ.get("TG_INSTALL_DIR", "/usr/local/bin"))
+ENGINE_DIR = Path(os.environ.get("TG_ENGINE_DIR", "/usr/local/lib/tool-guard"))
+LOG_DIR_BASE = Path(os.environ.get("TG_LOG_DIR", "/tmp/tool-guard-logs"))
 
 # Resolve PKG_ROOT relative to this script's location. Works both inside
 # the parent repo (scripts/tool-guard/) and post-extract (extracted root).
@@ -74,8 +76,47 @@ def _dim(s: str) -> str:    return _c(s, "2")
 # ─── Discovery ────────────────────────────────────────────────────────
 
 
+def _is_installed_mode() -> bool:
+    """True when running from the installed location (/usr/local/bin/tg).
+    In installed mode there are no <name>/wrapper.py subdirs next to tg —
+    the wrappers are flat files at INSTALL_DIR/<name>."""
+    return PKG_ROOT == INSTALL_DIR
+
+
+def _source_root() -> Path | None:
+    """Locate a directory that holds the source layout (<name>/wrapper.py
+    subdirs, _tests/, examples/). In source-tree mode that's PKG_ROOT
+    itself. In installed mode, fall back to the cache the
+    tool-guard-install.sh script populates (~/.local/share/tool-guard-source/,
+    overridable via TOOL_GUARD_CACHE_DIR). Returns None if neither
+    location has the expected layout."""
+    candidates: list[Path] = []
+    if not _is_installed_mode():
+        candidates.append(PKG_ROOT)
+    cache = Path(os.environ.get("TOOL_GUARD_CACHE_DIR")
+                 or os.path.expanduser("~/.local/share/tool-guard-source"))
+    candidates.append(cache)
+    for c in candidates:
+        if (c / "tool_guard.py").is_file():
+            return c
+    return None
+
+
 def _discover_guards() -> list[str]:
-    """List tool-guards' names from PKG_ROOT/<name>/wrapper.py. Skips _-prefixed dirs."""
+    """List tool-guards. In source-tree mode: subdirs of PKG_ROOT containing
+    a wrapper.py (skips _-prefixed dirs and examples/). In installed mode:
+    flat files at INSTALL_DIR that pass _guard_installed() (i.e. are OUR
+    wrappers, not unrelated /usr/local/bin/ binaries)."""
+    if _is_installed_mode():
+        names = []
+        for p in sorted(INSTALL_DIR.iterdir()):
+            if not p.is_file():
+                continue
+            if p.name == "tg":
+                continue
+            if _guard_installed(p.name):
+                names.append(p.name)
+        return names
     names = []
     for d in sorted(PKG_ROOT.iterdir()):
         if not d.is_dir() or d.name.startswith("_") or d.name.startswith("."):
@@ -140,7 +181,11 @@ def _log_file(name: str) -> Path | None:
 
 def cmd_list(_args) -> int:
     """List discoverable tool-guards + their installed status."""
-    print(f"{_bold('Tool-guards in package')} ({PKG_ROOT}):")
+    if _is_installed_mode():
+        header = f"{_bold('Installed tool-guards')} ({INSTALL_DIR}):"
+    else:
+        header = f"{_bold('Tool-guards in package')} ({PKG_ROOT}):"
+    print(header)
     guards = _discover_guards()
     if not guards:
         print(_dim("  (none discovered)"))
@@ -169,12 +214,18 @@ def cmd_status(args) -> int:
         print(f"{_bold('Config dir')}: {_red('not found')} ({_dim('no .tool-guard/ in any ancestor of cwd')})")
     print()
 
+    src = _source_root()
     for name in guards:
-        if not (PKG_ROOT / name / "wrapper.py").is_file():
+        # In source mode, "in package" means there's a wrapper.py beside us.
+        # In installed mode, the source isn't required to be present —
+        # what matters is whether the binary at INSTALL_DIR/<name> is ours.
+        installed = _guard_installed(name)
+        in_package = ((src and (src / name / "wrapper.py").is_file())
+                      or installed is not None)
+        if not in_package:
             print(f"{_yellow('?')} {name}: not in package")
             continue
 
-        installed = _guard_installed(name)
         if installed:
             print(f"{_green('●')} {_bold(name):<24} installed at {installed}")
         else:
@@ -207,11 +258,21 @@ def cmd_check(args) -> int:
     if you ran the command for real."""
     tool = args.tool
     extra = args.args
-    wrapper_path = PKG_ROOT / tool / "wrapper.py"
-    if not wrapper_path.is_file():
-        print(_red(f"tg: no tool-guard for tool '{tool}' at {wrapper_path}"), file=sys.stderr)
-        print(f"     Available: {', '.join(_discover_guards()) or '(none)'}", file=sys.stderr)
-        return 1
+    # In installed mode the source wrapper.py is in the cache, not next
+    # to the installed binary — fall back to _source_root() so check
+    # works post-install too. As a last resort, invoke the installed
+    # wrapper directly (it will still respond to <TOOL>_TG_DRYRUN).
+    src = _source_root()
+    wrapper_path = (src / tool / "wrapper.py") if src else None
+    if wrapper_path is None or not wrapper_path.is_file():
+        installed = _guard_installed(tool)
+        if installed:
+            wrapper_path = installed
+        else:
+            print(_red(f"tg: no tool-guard for tool '{tool}'"), file=sys.stderr)
+            print(f"     Looked at: {src / tool / 'wrapper.py' if src else '(no source root)'} and {INSTALL_DIR / tool}", file=sys.stderr)
+            print(f"     Available: {', '.join(_discover_guards()) or '(none)'}", file=sys.stderr)
+            return 1
 
     cmd_repr = f"{tool} {' '.join(extra)}"
     print(f"{_bold('Checking:')} {cmd_repr}")

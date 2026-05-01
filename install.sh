@@ -32,10 +32,23 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INSTALL_DIR="/usr/local/bin"
-ENGINE_DIR="/usr/local/lib/tool-guard"
+# INSTALL_DIR + ENGINE_DIR can be overridden via env vars — useful for
+# test harnesses that don't have sudo (e.g. CI) and for distros that
+# prefer a different prefix. When the override resolves to a path
+# already writable by the current user, we skip the `sudo` prefix.
+INSTALL_DIR="${TG_INSTALL_DIR:-/usr/local/bin}"
+ENGINE_DIR="${TG_ENGINE_DIR:-/usr/local/lib/tool-guard}"
 ENGINE_SRC="$SCRIPT_DIR/tool_guard.py"
 ENGINE_DST="$ENGINE_DIR/tool_guard.py"
+
+# Decide whether to prefix install commands with sudo. If the install
+# dir already exists and is writable, OR if the parent dir is writable,
+# we skip sudo. Otherwise sudo is needed.
+if [ -w "$INSTALL_DIR" ] || { [ ! -e "$INSTALL_DIR" ] && [ -w "$(dirname "$INSTALL_DIR")" ]; }; then
+  SUDO=""
+else
+  SUDO="sudo"
+fi
 
 err()  { echo "❌ $*" >&2; exit 1; }
 info() { echo "→  $*"; }
@@ -67,14 +80,14 @@ fi
 
 # Install the engine first — every stub needs it.
 info "Installing engine: $ENGINE_SRC → $ENGINE_DST"
-sudo install -d -m 0755 "$ENGINE_DIR"
-sudo install -m 0644 "$ENGINE_SRC" "$ENGINE_DST"
+$SUDO install -d -m 0755 "$ENGINE_DIR"
+$SUDO install -m 0644 "$ENGINE_SRC" "$ENGINE_DST"
 ok "engine → $ENGINE_DST"
 
 # Install the tg CLI (always)
 if [ -f "$TG_SRC" ]; then
   info "Installing tg CLI: $TG_SRC → $TG_DST"
-  sudo install -m 0755 "$TG_SRC" "$TG_DST"
+  $SUDO install -m 0755 "$TG_SRC" "$TG_DST"
   ok "tg → $TG_DST"
 else
   info "(tg CLI source not found at $TG_SRC — skipping)"
@@ -102,21 +115,25 @@ for name in "${TARGETS[@]}"; do
     fi
   fi
 
-  sudo install -m 0755 "$src" "$dst"
+  $SUDO install -m 0755 "$src" "$dst"
   ok "$name → $dst"
 done
 
-# Verify PATH order: /usr/local/bin must precede the real binary location
-echo
-for name in "${TARGETS[@]}"; do
-  resolved="$(command -v "$name" 2>/dev/null || true)"
-  if [ "$resolved" = "$INSTALL_DIR/$name" ]; then
-    ok "PATH OK: which $name → $resolved"
-  else
-    err "PATH check failed for $name: 'which $name' returns '$resolved' instead of $INSTALL_DIR/$name.
-         Check your PATH order — $INSTALL_DIR must come before /usr/bin."
-  fi
-done
+# Verify PATH order: install dir must precede the real binary location.
+# Skipped when TG_INSTALL_DIR override is set (typically a test sandbox
+# that isn't on PATH and doesn't need to be).
+if [ -z "${TG_INSTALL_DIR:-}" ]; then
+  echo
+  for name in "${TARGETS[@]}"; do
+    resolved="$(command -v "$name" 2>/dev/null || true)"
+    if [ "$resolved" = "$INSTALL_DIR/$name" ]; then
+      ok "PATH OK: which $name → $resolved"
+    else
+      err "PATH check failed for $name: 'which $name' returns '$resolved' instead of $INSTALL_DIR/$name.
+           Check your PATH order — $INSTALL_DIR must come before /usr/bin."
+    fi
+  done
+fi
 
 cat <<EOF
 

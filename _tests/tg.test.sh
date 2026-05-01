@@ -121,18 +121,34 @@ cat > "$TMP_LOG/testtool_20260501.log" <<'EOF'
 {"ts":"2026-05-01T10:02:00+0000","tool":"testtool","argv":["x"],"exit":13,"duration_ms":0,"policy":{"decision":"deny","rule":"x"}}
 EOF
 
-# -n 5 → tails all 3 entries
+# -n 5 → tails all 3 entries. Count by ISO-timestamp prefix (one per
+# entry) rather than tool name (which appears multiple places per line
+# and would pass even if rendering broke — Scott P1-A finding).
 out=$(TG_LOG_DIR="$TMP_LOG" "$TG" log testtool -n 5 2>&1)
 ec=$?
 assert_eq "log -n 5 exit code" "0" "$ec"
-n_lines=$(echo "$out" | grep -c "testtool" || true)
-assert_eq "log -n 5 returns all 3 entries" "3" "$n_lines"
+n_lines=$(echo "$out" | grep -cE "^2026-05-01T1[0-9]:" || true)
+assert_eq "log -n 5 returns all 3 entries (counted by ts prefix)" "3" "$n_lines"
+
+# Verify SPECIFIC rendered fields appear, not just generic tokens
+assert_contains "log renders timestamp from each entry" "2026-05-01T10:00:00" "$out"
+assert_contains "log renders rule field" "rule=v" "$out"
+assert_contains "log renders exit field" "exit=0" "$out"
+assert_contains "log renders duration_ms" "1ms" "$out"
 
 # -n 1 → tails 1 entry (the most recent)
 out=$(TG_LOG_DIR="$TMP_LOG" "$TG" log testtool -n 1 2>&1)
-n_lines=$(echo "$out" | grep -c "testtool" || true)
+n_lines=$(echo "$out" | grep -cE "^2026-05-01T1[0-9]:" || true)
 assert_eq "log -n 1 returns 1 entry" "1" "$n_lines"
-assert_contains "log -n 1 returns the LAST entry" "deny" "$out"
+# Most recent is the deny entry — verify both the decision AND the
+# specific argv from THAT entry are present.
+assert_contains "log -n 1 returns the deny entry (decision)" "deny" "$out"
+assert_contains "log -n 1 returns the deny entry (argv 'x')" "testtool x" "$out"
+if echo "$out" | grep -qE "10:00:00"; then
+  fail "log -n 1 leaked older entries" "should only show 10:02:00"
+else
+  pass "log -n 1 doesn't include older entries"
+fi
 
 # -n 0 → exits 0 with NO output (used for "is there a log?" scripts)
 out=$(TG_LOG_DIR="$TMP_LOG" "$TG" log testtool -n 0 2>&1)
@@ -147,7 +163,102 @@ ec=$?
 assert_eq "log -n -1 exit code" "2" "$ec"
 assert_contains "log -n -1 error message" "non-negative" "$out"
 
+# -n abc → argparse rejects with usage error, no traceback (P2-A)
+out=$(TG_LOG_DIR="$TMP_LOG" "$TG" log testtool -n abc 2>&1)
+ec=$?
+assert_eq "log -n abc — exit 2 (argparse)" "2" "$ec"
+if echo "$out" | grep -q "Traceback"; then
+  fail "log -n abc shows Python traceback" "should be argparse error"
+else
+  pass "log -n abc → no Python traceback (clean argparse error)"
+fi
+
 rm -rf "$TMP_LOG"
+
+# ─── Engine → tg log integration (round-trip schema test) ───────────
+# Scott P1-B: schema gaps between _build_event (writer) and cmd_log
+# (reader) wouldn't be caught by the hand-crafted JSONL fixture above.
+# This test runs the actual engine producing real JSONL, then reads it
+# back via `tg log`, asserting that specific engine-emitted fields
+# appear in the rendered output. Catches drift between writer + reader.
+echo ""
+echo "── engine ↔ tg log round-trip integration ──"
+RT_TMP=$(mktemp -d)
+mkdir -p "$RT_TMP/.tool-guard"
+cat > "$RT_TMP/.tool-guard/rttool.config.json" <<'EOF'
+{"defaultMode":"deny","allow":["allowed-cmd*"],"warn":[],"deny":[{"pattern":"deny-cmd*","message":"nope"}]}
+EOF
+mkdir -p "$RT_TMP/rttool"
+cat > "$RT_TMP/rttool/wrapper.py" <<EOF
+#!/usr/bin/env python3
+# TOOL_GUARD_STUB_v1
+import os, sys
+TOOL = "rttool"
+REAL = os.environ.get("RTTOOL_TG_REAL_BIN", "/usr/bin/rttool")  # TG_REAL_BIN_DEFAULT
+sys.path.insert(0, os.environ["TOOL_GUARD_ENGINE_DIR"])
+from tool_guard import run
+sys.exit(run(tool_name=TOOL, real_bin=REAL, secret_flags=set()))
+EOF
+RT_LOG=$(mktemp -d)
+ENGINE_PATH="$PKG_ROOT"  # source-tree
+
+# Produce 2 real engine events: one allow (calls /bin/true → exit 0),
+# one deny (rule match → exit 13).
+( cd "$RT_TMP" && env \
+    TG_TEST_MODE=1 \
+    TOOL_GUARD_ENGINE_DIR="$ENGINE_PATH" \
+    RTTOOL_TG_NONINTERACTIVE=1 \
+    RTTOOL_TG_LOG_DIR="$RT_LOG" \
+    RTTOOL_TG_REAL_BIN=/bin/true \
+    python3 "$RT_TMP/rttool/wrapper.py" allowed-cmd arg1 arg2 ) >/dev/null 2>&1
+ec1=$?
+( cd "$RT_TMP" && env \
+    TG_TEST_MODE=1 \
+    TOOL_GUARD_ENGINE_DIR="$ENGINE_PATH" \
+    RTTOOL_TG_NONINTERACTIVE=1 \
+    RTTOOL_TG_LOG_DIR="$RT_LOG" \
+    RTTOOL_TG_REAL_BIN=/bin/true \
+    python3 "$RT_TMP/rttool/wrapper.py" deny-cmd should-not-run ) >/dev/null 2>&1
+ec2=$?
+assert_eq "round-trip: allowed-cmd → exit 0" "0" "$ec1"
+assert_eq "round-trip: deny-cmd → exit 13 (DENY_EXIT_CODE)" "13" "$ec2"
+
+# Now read back via tg log — every field that the engine emits AND
+# tg log is supposed to render must appear.
+out=$(TG_LOG_DIR="$RT_LOG" "$TG" log rttool -n 5 2>&1)
+ec=$?
+assert_eq "tg log read engine-produced JSONL — exit 0" "0" "$ec"
+n=$(echo "$out" | grep -cE "^2[0-9]{3}-")
+assert_eq "round-trip: tg log shows 2 entries from engine" "2" "$n"
+assert_contains "round-trip: allow rule rendered" "rule=allowed-cmd*" "$out"
+assert_contains "round-trip: deny rule rendered" "rule=deny-cmd*" "$out"
+assert_contains "round-trip: argv from real call rendered" "rttool allowed-cmd arg1 arg2" "$out"
+assert_contains "round-trip: deny argv rendered" "rttool deny-cmd should-not-run" "$out"
+assert_contains "round-trip: exit code from real call (allow → 0)" "exit=0" "$out"
+assert_contains "round-trip: exit code from deny (13)" "exit=13" "$out"
+
+# Bonus: schema completeness — verify every field _build_event emits is
+# either rendered by tg log or explicitly known to be silently ignored.
+# Aksel + Scott P1-B: this catches drift if a field is added to
+# _build_event without a corresponding update path in cmd_log.
+LOG_FILE=$(ls "$RT_LOG"/*.log 2>/dev/null | head -1)
+expected_keys="ts tool argv cwd exit duration_ms ppid parent_cmd user claude_session policy"
+result=$(python3 - "$LOG_FILE" "$expected_keys" << 'PYEOF'
+import json, sys
+events = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+expected = set(sys.argv[2].split())
+for i, e in enumerate(events):
+    actual = set(e.keys()) - {"real_bin"}  # real_bin is conditional
+    if actual != expected:
+        missing = expected - actual; extra = actual - expected
+        print(f"DRIFT at entry {i}: missing={sorted(missing)} extra={sorted(extra)}")
+        sys.exit(1)
+print("schema-stable")
+PYEOF
+)
+assert_eq "round-trip: engine-emitted schema matches expected keys exactly" "schema-stable" "$result"
+
+rm -rf "$RT_TMP" "$RT_LOG"
 
 # ─── tg check (source-tree mode) ─────────────────────────────────────
 echo ""

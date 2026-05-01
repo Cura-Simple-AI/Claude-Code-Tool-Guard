@@ -23,8 +23,15 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INSTALL_DIR="/usr/local/bin"
-ENGINE_DIR="/usr/local/lib/tool-guard"
+INSTALL_DIR="${TG_INSTALL_DIR:-/usr/local/bin}"
+ENGINE_DIR="${TG_ENGINE_DIR:-/usr/local/lib/tool-guard}"
+
+# Skip sudo when the install dir is already writable (test harness).
+if [ -w "$INSTALL_DIR" ] || { [ ! -e "$INSTALL_DIR" ] && [ -w "$(dirname "$INSTALL_DIR")" ]; }; then
+  SUDO=""
+else
+  SUDO="sudo"
+fi
 
 err()  { echo "❌ $*" >&2; exit 1; }
 info() { echo "→  $*"; }
@@ -65,14 +72,14 @@ for name in "${TARGETS[@]}"; do
     err "$name: $dst is a Python script but does not look like our tool-guard. Refusing to remove. Inspect manually."
   fi
 
-  sudo rm -f "$dst"
+  $SUDO rm -f "$dst"
   ok "$name removed from $dst"
 done
 
 if $REMOVE_ENGINE && [ -d "$ENGINE_DIR" ]; then
   echo
   info "Removing engine: $ENGINE_DIR"
-  sudo rm -rf "$ENGINE_DIR"
+  $SUDO rm -rf "$ENGINE_DIR"
   ok "engine removed from $ENGINE_DIR"
 fi
 
@@ -83,7 +90,7 @@ if $REMOVE_ENGINE; then
     if head -1 "$TG_DST" 2>/dev/null | grep -qE "^#!.*python" \
        && grep -q "tool-guard" "$TG_DST" 2>/dev/null; then
       info "Removing tg CLI: $TG_DST"
-      sudo rm -f "$TG_DST"
+      $SUDO rm -f "$TG_DST"
       ok "tg removed from $TG_DST"
     else
       info "Skipping $TG_DST — does not look like our tg CLI"

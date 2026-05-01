@@ -153,9 +153,24 @@ The engine merges three files at load time:
 | `<repo>/.tool-guard/<tool>.config.local.json`| Per-user overrides + prompt-saved decisions   | ❌ no (gitignored) |
 | `<repo>/.tool-guard/_defaults.json`                  | Cross-cutting rules applied to every tool     | ✅ yes     |
 
-Discovery walks up from cwd looking for a `.tool-guard/` directory
-(mirrors how git locates `.git/`). Per-tool rules come first;
-defaults serve as a backstop.
+Discovery order for `.tool-guard/`:
+
+1. `$TOOL_GUARD_DIR` — explicit override (a directory path).
+2. Walk up from cwd (mirrors how git locates `.git/`, up to 20 levels).
+3. `~/.config/tool-guard/` — XDG-aligned per-user fallback.
+4. `~/.tool-guard/` — legacy/simple per-user fallback.
+
+The fallbacks (3 and 4) matter for invocations from arbitrary cwds —
+e.g. an MCP server runs `az` with `cwd=/usr/bin`, where the walk-up
+finds nothing. Without a home fallback the engine drops to embedded
+deny-all and auth breaks.
+
+Recommended setup for MCP / out-of-repo scenarios:
+
+```bash
+# Symlink your repo's policy into ~/.config/ so any cwd is covered
+ln -s "$(pwd)/.tool-guard" ~/.config/tool-guard
+```
 
 Override the merged set entirely with
 `<TOOL>_TG_CONFIG=/path/to/file.json` (handy for tests and

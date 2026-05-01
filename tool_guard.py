@@ -164,8 +164,23 @@ def _get_parent_cmd() -> str | None:
 
 
 def _find_guards_dir(start: Path | None = None) -> Path | None:
-    """Walk up from `start` (default cwd) looking for a `.tool-guard/` directory.
-    Mirrors how git locates `.git/`. Returns the dir, or None within 20 levels."""
+    """Locate the `.tool-guard/` config dir in priority order:
+
+      1. $TOOL_GUARD_DIR — explicit override (a directory path).
+      2. Walk up from `start` (default cwd) looking for `.tool-guard/`.
+         Mirrors how git locates `.git/`. Up to 20 levels.
+      3. ~/.config/tool-guard/ — XDG-aligned per-user fallback.
+      4. ~/.tool-guard/ — legacy/simple per-user fallback.
+
+    The fallbacks (3 and 4) matter for invocations from arbitrary cwds,
+    e.g. an MCP server running az with cwd=/usr/bin — without them, the
+    walk-up reaches / without finding anything and the engine falls
+    back to embedded deny-all. Returns None only if no candidate exists."""
+    explicit = os.environ.get("TOOL_GUARD_DIR")
+    if explicit:
+        p = Path(explicit)
+        return p if p.is_dir() else None
+
     p = (start or Path.cwd()).resolve()
     for _ in range(20):
         candidate = p / ".tool-guard"
@@ -174,6 +189,11 @@ def _find_guards_dir(start: Path | None = None) -> Path | None:
         if p == p.parent:
             break
         p = p.parent
+
+    home = Path.home()
+    for fallback in (home / ".config" / "tool-guard", home / ".tool-guard"):
+        if fallback.is_dir():
+            return fallback
     return None
 
 

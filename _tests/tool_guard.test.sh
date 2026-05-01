@@ -1158,6 +1158,102 @@ PYEOF
 )
 assert_eq "parent_cmd populated" "ok" "$parent_ok"
 
+# ─── 29. Config-dir discovery — fallback to ~/.config/tool-guard ─────
+echo ""
+echo "── 29. _find_guards_dir() — fallback chain ──"
+
+# Set up a fake $HOME with ~/.config/tool-guard/ + an az config there.
+# Run the engine with cwd=/tmp (no walk-up will find anything) and
+# verify it picks up the home fallback.
+FAKE_HOME=$(mktemp -d)
+mkdir -p "$FAKE_HOME/.config/tool-guard"
+cat > "$FAKE_HOME/.config/tool-guard/testtool.config.json" <<'EOF'
+{"defaultMode":"prompt","allow":["from-home-config*"]}
+EOF
+
+# Use python -c to exercise _find_guards_dir() directly
+result=$(HOME="$FAKE_HOME" TOOL_GUARD_ENGINE_DIR="$ENGINE_DIR" python3 -c "
+import os, sys; sys.path.insert(0, '$ENGINE_DIR')
+os.chdir('/tmp')  # cwd-walk-up will fail
+from tool_guard import _find_guards_dir
+d = _find_guards_dir()
+print(str(d) if d else 'None')
+")
+expected="$FAKE_HOME/.config/tool-guard"
+assert_eq "~/.config/tool-guard fallback fires when walk-up fails" "$expected" "$result"
+
+# Verify ~/.tool-guard/ also works (legacy fallback)
+FAKE_HOME2=$(mktemp -d)
+mkdir -p "$FAKE_HOME2/.tool-guard"
+result=$(HOME="$FAKE_HOME2" TOOL_GUARD_ENGINE_DIR="$ENGINE_DIR" python3 -c "
+import os, sys; sys.path.insert(0, '$ENGINE_DIR')
+os.chdir('/tmp')
+from tool_guard import _find_guards_dir
+print(_find_guards_dir())
+")
+expected="$FAKE_HOME2/.tool-guard"
+assert_eq "~/.tool-guard legacy fallback fires" "$expected" "$result"
+
+# Verify TOOL_GUARD_DIR env var beats walk-up AND home fallback
+EXPLICIT_DIR=$(mktemp -d)/somewhere
+mkdir -p "$EXPLICIT_DIR"
+result=$(HOME="$FAKE_HOME" TOOL_GUARD_DIR="$EXPLICIT_DIR" \
+         TOOL_GUARD_ENGINE_DIR="$ENGINE_DIR" python3 -c "
+import sys; sys.path.insert(0, '$ENGINE_DIR')
+from tool_guard import _find_guards_dir
+print(_find_guards_dir())
+")
+assert_eq "TOOL_GUARD_DIR overrides everything" "$EXPLICIT_DIR" "$result"
+
+# Verify walk-up still beats home fallback (precedence: explicit > walk > home)
+result=$(HOME="$FAKE_HOME" TOOL_GUARD_ENGINE_DIR="$ENGINE_DIR" python3 -c "
+import os, sys; sys.path.insert(0, '$ENGINE_DIR')
+os.chdir('$WORK_DIR')  # has a real .tool-guard/ from the test setup
+from tool_guard import _find_guards_dir
+print(_find_guards_dir())
+")
+expected="$GUARDS_DIR"
+assert_eq "cwd walk-up wins over ~/.config fallback" "$expected" "$result"
+
+# Verify TOOL_GUARD_DIR pointed at non-existent dir → None (don't silently fall back)
+result=$(TOOL_GUARD_DIR=/nonexistent/path TOOL_GUARD_ENGINE_DIR="$ENGINE_DIR" \
+         python3 -c "
+import sys; sys.path.insert(0, '$ENGINE_DIR')
+from tool_guard import _find_guards_dir
+print(_find_guards_dir())
+")
+assert_eq "TOOL_GUARD_DIR=/nonexistent → None (no silent fallback)" "None" "$result"
+
+rm -rf "$FAKE_HOME" "$FAKE_HOME2" "$EXPLICIT_DIR"
+
+echo ""
+echo "── 30. End-to-end: config from ~/.config/tool-guard works for /usr/bin invocations ──"
+# Simulates the MCP scenario: az is invoked from a cwd that has no
+# .tool-guard/ ancestor. Without the home fallback this would deny;
+# with it the home config's allow rule should match.
+FAKE_HOME=$(mktemp -d)
+mkdir -p "$FAKE_HOME/.config/tool-guard"
+cat > "$FAKE_HOME/.config/tool-guard/testtool.config.json" <<'EOF'
+{"defaultMode":"deny","allow":["mcp-style-call*"]}
+EOF
+LOG_DIR=$(mktemp -d)
+
+# Run with cwd=/tmp (no walk-up will find anything) and HOME=fake
+out=$(cd /tmp && HOME="$FAKE_HOME" TOOL_GUARD_ENGINE_DIR="$ENGINE_DIR" \
+      TESTTOOL_TG_LOG_DIR="$LOG_DIR" \
+      python3 "$TESTTOOL" mcp-style-call --arg foo 2>&1)
+ec=$?
+assert_eq "mcp-from-/tmp scenario → allow (exit 0)" "0" "$ec"
+
+# And verify a non-matching call from same cwd is still denied
+out=$(cd /tmp && HOME="$FAKE_HOME" TOOL_GUARD_ENGINE_DIR="$ENGINE_DIR" \
+      TESTTOOL_TG_LOG_DIR="$LOG_DIR" \
+      python3 "$TESTTOOL" forbidden --arg foo 2>&1)
+ec=$?
+assert_eq "non-matching call still denied via home config" "13" "$ec"
+
+rm -rf "$FAKE_HOME" "$LOG_DIR"
+
 # ─── Result ──────────────────────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════════════════════"

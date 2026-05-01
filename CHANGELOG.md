@@ -40,6 +40,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Python's `lst[-0:]` returning the whole list. Now `-n 0` returns
   empty (exit 0, useful for "is there a log at all?" scripts) and
   negative N rejects with exit 2.
+- MCP servers and other out-of-repo invocations (where the calling
+  process's cwd has no `.tool-guard/` ancestor — e.g. an Azure DevOps
+  MCP server running `az` with `cwd=/usr/bin/`) silently fell through
+  to the embedded deny-all default. Engine now also checks
+  `~/.config/tool-guard/` and `~/.tool-guard/` as fallbacks. Added
+  `TOOL_GUARD_DIR` env var as an explicit override (used by tests
+  and for non-standard layouts). Verified end-to-end: `mcp__azure-devops__core_list_projects`
+  now succeeds via the home-config symlink and the call appears in
+  the log with `decision=allow`, rule=`account get-access-token*`.
 
 ### Changed (BREAKING — pre-1.0, original)
 - Renamed package from "wrapper(s)" to "tool-guard(s)" everywhere:

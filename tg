@@ -129,15 +129,27 @@ def _discover_guards() -> list[str]:
 
 
 def _find_guards_dir(start: Path | None = None) -> Path | None:
-    """Walk up from start (default cwd) looking for a `.tool-guard/` dir."""
+    """Locate the .tool-guard/ config dir. Mirrors the engine:
+      1. $TOOL_GUARD_DIR override
+      2. cwd walk-up
+      3. ~/.config/tool-guard/
+      4. ~/.tool-guard/"""
+    explicit = os.environ.get("TOOL_GUARD_DIR")
+    if explicit:
+        p = Path(explicit)
+        return p if p.is_dir() else None
     p = (start or Path.cwd()).resolve()
     for _ in range(20):
         c = p / ".tool-guard"
         if c.is_dir():
             return c
         if p == p.parent:
-            return None
+            break
         p = p.parent
+    home = Path.home()
+    for fallback in (home / ".config" / "tool-guard", home / ".tool-guard"):
+        if fallback.is_dir():
+            return fallback
     return None
 
 

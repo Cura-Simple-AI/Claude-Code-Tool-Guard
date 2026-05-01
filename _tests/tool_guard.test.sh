@@ -381,6 +381,66 @@ else
   fail "_env_prefix() validation"
 fi
 
+# ─── 13c. Regex rule type ────────────────────────────────────────────
+echo ""
+echo "── 13c. Regex rule type (type: 'regex') ──"
+clear_configs
+write_config '{"defaultMode":"allow","deny":[{"type":"regex","pattern":"\\b[Ff]ixes #\\d+","message":"matches with word boundary"}]}'
+
+# Word boundary works — matches "Fixes #1" but NOT "prefixes #1"
+assert_stderr "regex matches at word boundary" 'classify=deny' \
+  TESTTOOL_TG_DRYRUN=1 -- something "Fixes #1234"
+
+assert_stderr "regex does NOT match substring (prefixes)" 'classify=allow rule=<defaultMode>' \
+  TESTTOOL_TG_DRYRUN=1 -- something "prefixes #1234"
+
+# Demonstrate case-sensitivity by default — pattern uses literal F (no [Ff])
+clear_configs
+write_config '{"defaultMode":"allow","deny":[{"type":"regex","pattern":"\\bFixes #\\d+"}]}'
+assert_stderr "regex case-sensitive: uppercase F matches" 'classify=deny' \
+  TESTTOOL_TG_DRYRUN=1 -- something "Fixes #1"
+assert_stderr "regex case-sensitive: lowercase f does NOT match" 'classify=allow rule=<defaultMode>' \
+  TESTTOOL_TG_DRYRUN=1 -- something "fixes #1"
+
+# Restore the [Ff] pattern for the rest of the section
+clear_configs
+write_config '{"defaultMode":"allow","deny":[{"type":"regex","pattern":"\\b[Ff]ixes #\\d+"}]}'
+
+# (?i) inline flag for case-insensitive
+clear_configs
+write_config '{"defaultMode":"allow","deny":[{"type":"regex","pattern":"(?i)\\b(fix|fixes)\\b #\\d+"}]}'
+assert_stderr "regex (?i) catches lowercase" 'classify=deny' \
+  TESTTOOL_TG_DRYRUN=1 -- something "fixes #1"
+
+# Default rule type is glob (omitting type doesn't auto-promote regex syntax)
+clear_configs
+write_config '{"defaultMode":"allow","deny":[{"pattern":"\\b[Ff]ixes #*"}]}'
+assert_stderr "default type is glob (regex syntax not interpreted)" 'classify=allow rule=<defaultMode>' \
+  TESTTOOL_TG_DRYRUN=1 -- something "Fixes #1"
+
+# Explicit type: "glob" works
+clear_configs
+write_config '{"defaultMode":"allow","deny":[{"type":"glob","pattern":"foo*","message":"glob test"}]}'
+assert_stderr "explicit type=glob" 'classify=deny rule="foo*"' \
+  TESTTOOL_TG_DRYRUN=1 -- foo bar
+
+# Invalid regex → warning + no-match (doesn't crash wrapper)
+clear_configs
+write_config '{"defaultMode":"allow","deny":[{"type":"regex","pattern":"[unclosed","message":"broken"}]}'
+assert_stderr "invalid regex → warning to stderr" "invalid regex" \
+  TESTTOOL_TG_DRYRUN=1 -- anything
+
+assert_stderr "invalid regex → falls through to defaultMode" 'classify=allow' \
+  TESTTOOL_TG_DRYRUN=1 -- anything
+
+# Unknown type → falls back to glob with warning
+clear_configs
+write_config '{"defaultMode":"allow","deny":[{"type":"posix","pattern":"foo*"}]}'
+assert_stderr "unknown type → warning + falls back to glob" "type must be 'glob' or 'regex'" \
+  TESTTOOL_TG_DRYRUN=1 -- foo bar
+assert_stderr "unknown type fallback still matches glob pattern" 'classify=deny' \
+  TESTTOOL_TG_DRYRUN=1 -- foo bar
+
 # ─── 13. Edge cases ──────────────────────────────────────────────────
 echo ""
 echo "── 13. Edge cases ──"

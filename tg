@@ -513,7 +513,12 @@ def cmd_uninstall(args) -> int:
 
 
 def cmd_log(args) -> int:
-    """Show last N entries from the tool-guard's log."""
+    """Show last N entries from the tool-guard's log. -n must be a
+    non-negative integer (0 = show nothing, useful for scripted "is
+    there a log at all?" checks; positive = tail N entries)."""
+    if args.n < 0:
+        print(_red(f"tg: -n must be non-negative (got {args.n})"), file=sys.stderr)
+        return 2
     log = _log_file(args.tool)
     if log is None:
         print(_dim(f"tg: no log file for {args.tool} at {LOG_DIR_BASE / args.tool}/"), file=sys.stderr)
@@ -524,7 +529,9 @@ def cmd_log(args) -> int:
     except OSError as e:
         print(_red(f"tg: cannot read {log}: {e}"), file=sys.stderr)
         return 1
-    tail = lines[-args.n :] if args.n > 0 else lines
+    if args.n == 0:
+        return 0
+    tail = lines[-args.n :]
     for line in tail:
         try:
             event = json.loads(line)

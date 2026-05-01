@@ -205,6 +205,33 @@ assert_exit "_SLEEP_TG_ACTIVE=1 doesn't bypass guard (still blocks 999s)" 1 \
 assert_exit "without sentinel + outside Claude → passes through" 0 \
   tt_claude 0 SLEEP_TG_REAL_BIN=/bin/true -- 999
 
+# ─── 8. SECURITY: SLEEP_TG_MAX upper bound (P2 from quinn) ──────────
+echo ""
+echo "── 8. SLEEP_TG_MAX is hard-capped at 300s ──"
+# Pre-fix: SLEEP_TG_MAX=999999 effectively disabled the guard. Now
+# any value > 300 is clamped down to 300 with a warning.
+out=$(tt_claude 1 SLEEP_TG_MAX=999999 SLEEP_TG_REAL_BIN=/bin/true -- 500 2>&1)
+ec=$?
+# 500s > 300s (clamped max) → blocked under Claude → exit 1
+if [[ $ec -eq 1 ]]; then
+  pass "SLEEP_TG_MAX=999999 clamped to 300 (500s still blocked)"
+else
+  fail "SLEEP_TG_MAX clamp" "exit=$ec out=$(echo "$out" | head -1)"
+fi
+if echo "$out" | grep -qF "exceeds hard cap"; then
+  pass "SLEEP_TG_MAX clamp warning shown"
+else
+  fail "SLEEP_TG_MAX clamp warning" "got: $out"
+fi
+
+# Negative value rejected
+out=$(tt_claude 1 SLEEP_TG_MAX=-5 SLEEP_TG_REAL_BIN=/bin/true -- 999 2>&1)
+if echo "$out" | grep -qF "negative"; then
+  pass "SLEEP_TG_MAX negative rejected"
+else
+  fail "SLEEP_TG_MAX negative" "got: $out"
+fi
+
 # ─── Result ──────────────────────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════════════════════"

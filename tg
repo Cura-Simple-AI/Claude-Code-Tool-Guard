@@ -549,12 +549,23 @@ def _validate_config_file(path: Path) -> list[str]:
                     )
                 elif rule["type"] == "regex" and isinstance(rule.get("pattern"), str):
                     # Try to compile the regex; report syntax errors at validate time
+                    pat = rule["pattern"]
                     try:
                         import re as _re
-                        _re.compile(rule["pattern"])
+                        _re.compile(pat)
                     except _re.error as e:
                         issues.append(
                             f"'{category}'[{i}].pattern is invalid regex: {e}"
+                        )
+                    # P2 finding: regex rules use re.search (substring match,
+                    # not fullmatch). Warn for deny rules without ^ anchor —
+                    # an unanchored deny like 'az$' would match 'notaz', a
+                    # weaker rule than the author intended.
+                    if category == "deny" and not pat.startswith(("^", "(?")) and "^" not in pat[:5]:
+                        issues.append(
+                            f"'{category}'[{i}].pattern={pat!r}: regex deny rules without "
+                            "an explicit '^' anchor are substring-matched, weaker than likely intended. "
+                            "Add '^' (or use type='glob' which has implicit anchoring)."
                         )
             # Warn about unknown keys (don't fail — schema is forward-compatible)
             known = {"pattern", "message", "claude_only", "type"}

@@ -472,7 +472,14 @@ def derive_pattern(argv: list[str]) -> str:
 
 def redact(argv: list[str], secret_flags: set[str]) -> list[str]:
     """Replace values immediately following secret-bearing flags with <redacted>.
-    Handles both `--password value` and `--password=value` forms."""
+    Handles both `--password value` and `--password=value` forms.
+
+    Flag matching is CASE-INSENSITIVE for redaction (P2 finding from
+    security audit): a user passing `--Password=secret` would otherwise
+    leak the value into the audit log because `--Password` doesn't match
+    `--password` exactly. Original argv casing is preserved in output;
+    only the membership check is normalized."""
+    secret_flags_lower = {f.lower() for f in secret_flags}
     out: list[str] = []
     skip_next = False
     for arg in argv:
@@ -481,9 +488,9 @@ def redact(argv: list[str], secret_flags: set[str]) -> list[str]:
             skip_next = False
             continue
         out.append(arg)
-        if arg in secret_flags:
+        if arg.lower() in secret_flags_lower:
             skip_next = True
-        elif "=" in arg and arg.split("=", 1)[0] in secret_flags:
+        elif "=" in arg and arg.split("=", 1)[0].lower() in secret_flags_lower:
             flag = arg.split("=", 1)[0]
             out[-1] = f"{flag}=<redacted>"
     return out
@@ -548,6 +555,24 @@ def prompt_user(tool_name: str, argv: list[str]) -> tuple[str, bool]:
         if choice == "a":
             return "allow", False
         if choice == "A":
+            # P2 finding: derive_pattern("*") (empty argv) would persist
+            # an allow-everything rule with one keystroke. Require an
+            # explicit second confirmation when the pattern is overly
+            # broad ("*" matches every command).
+            if suggested == "*":
+                sys.stderr.write(
+                    f"  ⚠ Suggested pattern '*' matches ALL commands. "
+                    "Persisting it would allow every future call. Type 'YES' to confirm: "
+                )
+                sys.stderr.flush()
+                try:
+                    confirm = input().strip()
+                except (EOFError, KeyboardInterrupt):
+                    print(f"\n  cancelled — denying.", file=sys.stderr)
+                    return "deny", False
+                if confirm != "YES":
+                    print(f"  not confirmed — denying instead.", file=sys.stderr)
+                    return "deny", False
             return "allow", True
         if choice == "d":
             return "deny", False
@@ -613,8 +638,9 @@ def _build_event(
     rule: dict | None,
     exit_code: int,
     duration_ms: int,
+    real_bin: str | None = None,
 ) -> dict:
-    return {
+    event = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "tool": tool_name,
         "argv": redact(argv, secret_flags),
@@ -630,6 +656,13 @@ def _build_event(
             "rule": rule.get("pattern") if rule else None,
         },
     }
+    # Record the actual real binary path used — important for audit
+    # when the user/process overrode it via <TOOL>_TG_REAL_BIN. Auditor
+    # can detect substitution attempts (e.g. real_bin=/usr/bin/bash for
+    # an az call) by reviewing this field.
+    if real_bin:
+        event["real_bin"] = real_bin
+    return event
 
 
 def _print_deny_message(
@@ -724,6 +757,20 @@ def run(
     real_bin_override = _env(tool_name, "REAL_BIN")
     if real_bin_override:
         real_bin = real_bin_override
+        # Soft warning when an override's basename doesn't match the tool
+        # name — catches obvious substitution attempts like
+        # AZ_TG_REAL_BIN=/usr/bin/bash. Doesn't block (legitimate use:
+        # snap installs put az at /snap/bin/az, basename still 'az').
+        # P2 finding from security audit: log so the substitution is
+        # visible to anyone reviewing the audit log.
+        override_base = os.path.basename(real_bin_override).split(".")[0]
+        if override_base != tool_name:
+            print(
+                f"{tool_name}-tool-guard: ⚠ REAL_BIN override {real_bin_override!r} "
+                f"has basename {override_base!r}, expected {tool_name!r}. "
+                "Logged to audit log; proceeding anyway.",
+                file=sys.stderr,
+            )
 
     if not (os.path.isfile(real_bin) and os.access(real_bin, os.X_OK)):
         # Combined check covers:
@@ -779,6 +826,7 @@ def run(
                 rule={"pattern": "<no-match,non-interactive>"},
                 exit_code=DENY_EXIT_CODE,
                 duration_ms=0,
+                real_bin=real_bin if real_bin_override else None,
             )
             write_event(tool_name, event)
             _print_deny_message(tool_name, argv, None, auto_deny_no_match=True)
@@ -802,6 +850,7 @@ def run(
             rule=matched_rule,
             exit_code=DENY_EXIT_CODE,
             duration_ms=0,
+            real_bin=real_bin if real_bin_override else None,
         )
         write_event(tool_name, event)
         _print_deny_message(tool_name, argv, matched_rule)
@@ -821,6 +870,7 @@ def run(
         rule=matched_rule,
         exit_code=proc.returncode,
         duration_ms=duration_ms,
+        real_bin=real_bin if real_bin_override else None,
     )
     write_event(tool_name, event)
 

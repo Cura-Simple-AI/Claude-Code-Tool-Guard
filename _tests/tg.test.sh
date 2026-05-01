@@ -731,6 +731,40 @@ out=$(cd "$NEW_CWD" && HOME="$HOME_FALLBACK" EDITOR=true "$EDIT_SANDBOX/tg" conf
 
 rm -rf "$EDIT_SANDBOX" "$EDIT_CWD" "$HOME_FALLBACK" "$NEW_CWD"
 
+# ─── tg config validate — regex anchor warning (P2 from quinn) ───────
+echo ""
+echo "── tg config validate — regex deny without ^ anchor warns ──"
+ANCHOR_TMP=$(mktemp -d)
+mkdir -p "$ANCHOR_TMP/.tool-guard"
+# Unanchored regex deny — substring-matches, weaker than likely intended
+cat > "$ANCHOR_TMP/.tool-guard/myanchor.config.json" <<'EOF'
+{"defaultMode":"prompt","allow":[],"warn":[],"deny":[{"pattern":"foo$","type":"regex","message":"x"}]}
+EOF
+out=$(cd "$ANCHOR_TMP" && "$TG" config validate 2>&1)
+ec=$?
+if [[ $ec -eq 1 ]] && echo "$out" | grep -qF "without an explicit '^' anchor"; then
+  pass "unanchored regex deny → warning + non-zero exit"
+else
+  fail "regex anchor warning" "ec=$ec out=$out"
+fi
+
+# Properly anchored regex deny — passes
+cat > "$ANCHOR_TMP/.tool-guard/myanchor.config.json" <<'EOF'
+{"defaultMode":"prompt","allow":[],"warn":[],"deny":[{"pattern":"^foo.*","type":"regex","message":"x"}]}
+EOF
+out=$(cd "$ANCHOR_TMP" && "$TG" config validate 2>&1)
+ec=$?
+assert_eq "anchored regex deny passes validate" "0" "$ec"
+
+# Glob deny rules NOT subject to the warning (they're already bounded)
+cat > "$ANCHOR_TMP/.tool-guard/myanchor.config.json" <<'EOF'
+{"defaultMode":"prompt","allow":[],"warn":[],"deny":["foo*"]}
+EOF
+out=$(cd "$ANCHOR_TMP" && "$TG" config validate 2>&1)
+ec=$?
+assert_eq "glob deny rules not subject to anchor warning" "0" "$ec"
+rm -rf "$ANCHOR_TMP"
+
 # ─── Result ──────────────────────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════════════════════"

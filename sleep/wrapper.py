@@ -36,9 +36,26 @@ REAL_SLEEP = os.environ.get("SLEEP_TG_REAL_BIN", "/usr/bin/sleep")
 
 # Defensive parsing of SLEEP_TG_MAX — a typo in the env value should
 # warn + fall back to the default rather than crash the tool-guard.
+# Hard-capped at 300s (5 min): SLEEP_TG_MAX=999999 was effectively
+# disabling the sleep guard (P2 finding from security audit). Allow
+# tuning the threshold for legitimate workflows but not arbitrarily.
+_HARD_MAX = 300
 _max_raw = os.environ.get("SLEEP_TG_MAX", "30")
 try:
     MAX_SECS = int(_max_raw)
+    if MAX_SECS > _HARD_MAX:
+        print(
+            f"sleep-tool-guard: SLEEP_TG_MAX={MAX_SECS} exceeds hard cap {_HARD_MAX}s "
+            f"— clamping to {_HARD_MAX}. Use ScheduleWakeup/CronCreate for longer waits.",
+            file=sys.stderr,
+        )
+        MAX_SECS = _HARD_MAX
+    elif MAX_SECS < 0:
+        print(
+            f"sleep-tool-guard: SLEEP_TG_MAX={MAX_SECS} is negative — falling back to 30s.",
+            file=sys.stderr,
+        )
+        MAX_SECS = 30
 except ValueError:
     print(
         f"sleep-tool-guard: invalid SLEEP_TG_MAX={_max_raw!r} — falling back to default 30s.",

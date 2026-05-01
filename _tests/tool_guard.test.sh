@@ -1481,6 +1481,61 @@ else
 fi
 rm -rf "$EVIL_TMP"
 
+# ─── 34. SECURITY: redact() case-insensitive (P2 from quinn) ────────
+echo ""
+echo "── 34. redact() case-insensitive flag matching ──"
+clear_configs
+write_config '{"defaultMode":"allow","allow":["*"]}'
+
+# Pre-fix: --Password=secret was NOT redacted (case-sensitive match
+# against "--password"). Audit log captured the secret in plaintext.
+# Post-fix: case-insensitive match — secret value redacted.
+LOG_DIR=$(mktemp -d)
+tt TESTTOOL_TG_LOG_DIR="$LOG_DIR" -- auth --Password supersecret --Token alsosecret >/dev/null 2>&1
+LOG_FILE=$(ls "$LOG_DIR"/*.log 2>/dev/null | head -1)
+if [[ -f "$LOG_FILE" ]] && ! grep -qF "supersecret" "$LOG_FILE" \
+                       && ! grep -qF "alsosecret" "$LOG_FILE"; then
+  pass "case-variant flags (--Password, --Token) redacted"
+else
+  fail "case-variant secret flag" "log: $(cat "$LOG_FILE" 2>/dev/null | head -1 | head -c 200)"
+fi
+
+# --PASSWORD=secret (uppercase + equals form)
+LOG_DIR=$(mktemp -d)
+tt TESTTOOL_TG_LOG_DIR="$LOG_DIR" -- auth --PASSWORD=secretvalue >/dev/null 2>&1
+LOG_FILE=$(ls "$LOG_DIR"/*.log 2>/dev/null | head -1)
+if [[ -f "$LOG_FILE" ]] && grep -qF "<redacted>" "$LOG_FILE" && ! grep -qF "secretvalue" "$LOG_FILE"; then
+  pass "--PASSWORD=value (uppercase + equals) redacted"
+else
+  fail "--PASSWORD=value redaction" "log: $(cat "$LOG_FILE" 2>/dev/null | head -1 | head -c 200)"
+fi
+rm -rf "$LOG_DIR"
+
+# ─── 35. real_bin recorded in audit log when overridden (P2) ─────────
+echo ""
+echo "── 35. real_bin recorded in audit log on override (P2) ──"
+clear_configs
+write_config '{"defaultMode":"allow","allow":["*"]}'
+
+LOG_DIR=$(mktemp -d)
+# With override → real_bin field appears in log
+tt TESTTOOL_TG_LOG_DIR="$LOG_DIR" TESTTOOL_TG_REAL_BIN=/bin/true -- some op >/dev/null 2>&1
+LOG_FILE=$(ls "$LOG_DIR"/*.log 2>/dev/null | head -1)
+if grep -qF '"real_bin": "/bin/true"' "$LOG_FILE"; then
+  pass "real_bin recorded in event when REAL_BIN overridden"
+else
+  fail "real_bin not in log" "$(cat "$LOG_FILE" 2>/dev/null | head -1)"
+fi
+
+# Basename mismatch → stderr warning
+out=$(tt TESTTOOL_TG_LOG_DIR="$LOG_DIR" TESTTOOL_TG_REAL_BIN=/bin/echo -- some op 2>&1)
+if echo "$out" | grep -qF "REAL_BIN override" && echo "$out" | grep -qF "echo"; then
+  pass "REAL_BIN basename mismatch produces stderr warning"
+else
+  fail "REAL_BIN mismatch warning" "got: $out"
+fi
+rm -rf "$LOG_DIR"
+
 # ─── Result ──────────────────────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════════════════════"

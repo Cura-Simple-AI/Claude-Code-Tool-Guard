@@ -223,7 +223,7 @@ For each wrapped tool (prefix = `<TOOL>_WRAPPER_`, e.g. `AZ_WRAPPER_`):
 | `<TOOL>_TG_NONINTERACTIVE=1`   | Treat stdin as non-TTY (auto-deny on prompt) |
 | `<TOOL>_TG_FAKE_CLAUDE=0\|1`   | Force `claude_only` rules off (`0`) or on (`1`) — for tests |
 | `<TOOL>_TG_CONFIG=/path/...`   | Single-file config override (replaces all layers) |
-| `<TOOL>_TG_LOG_DIR=/path/...`  | Override log dir (default `/tmp/tool-guard-logs/<tool>`) |
+| `<TOOL>_TG_LOG_DIR=/path/...`  | Override log dir (default `/tmp/tool-guard`; one file per tool/day, `<tool>_YYYYMMDD.log`) |
 | `_<TOOL>_TG_ACTIVE=1`          | Internal recursion sentinel (do not set manually) |
 
 ## How install.sh works

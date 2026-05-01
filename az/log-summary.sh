@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Summarise az-tool-guard logs to find candidate deny-filter patterns.
 #
-# Reads ~/.local/share/az-tool-guard/calls-*.jsonl (override with
-# AZ_TG_LOG_DIR) and prints:
+# Reads /tmp/tool-guard/az_*.log (override with AZ_TG_LOG_DIR) and prints:
 #   - Top 20 most-invoked sub-commands (first 2 args, e.g. "account show")
 #   - Top 10 callers (parent_cmd basename)
 #   - Total call count + time range
@@ -13,19 +12,20 @@
 
 set -euo pipefail
 
-LOG_DIR="${AZ_TG_LOG_DIR:-/tmp/tool-guard-logs/az}"
+LOG_DIR="${AZ_TG_LOG_DIR:-/tmp/tool-guard}"
+LOG_GLOB="$LOG_DIR/az_*.log"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "❌ jq not installed. Install: sudo apt-get install -y jq" >&2
   exit 1
 fi
 
-if ! ls "$LOG_DIR"/calls-*.jsonl >/dev/null 2>&1; then
-  echo "No log files found in $LOG_DIR. Either no calls have been made yet, or the tool-guard is not installed."
+if ! ls $LOG_GLOB >/dev/null 2>&1; then
+  echo "No log files matching $LOG_GLOB. Either no calls have been made yet, or the tool-guard is not installed."
   exit 0
 fi
 
-LOGS="$LOG_DIR/calls-*.jsonl"
+LOGS="$LOG_GLOB"
 
 echo "═══ az-tool-guard call summary ═══"
 echo "Log dir: $LOG_DIR"

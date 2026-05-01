@@ -16,7 +16,7 @@
 #
 # Each tool-guard's policy config lives in <repo-root>/.tool-guard/<name>.config.json.
 # Cross-cutting rules live in <repo-root>/.tool-guard/_defaults.json.
-# Logs go to /tmp/tool-guard-logs/<name>/calls-YYYY-MM.jsonl (created on first call).
+# Logs go to /tmp/tool-guard/<name>_YYYYMMDD.log (created on first call).
 #
 # Idempotent — re-running overwrites existing tool-guard + engine. Refuses
 # to overwrite a binary that is not a Python tool-guard script (so we don't
@@ -134,7 +134,7 @@ for name in "${TARGETS[@]}"; do
     Source:      $SCRIPT_DIR/$name/wrapper.py
     Policy:      <repo>/.tool-guard/${name}.config.json
     Local cfg:   <repo>/.tool-guard/${name}.config.local.json (gitignored)
-    Logs:        /tmp/tool-guard-logs/$name/calls-\$(date +%Y-%m).jsonl
+    Logs:        /tmp/tool-guard/${name}_\$(date +%Y%m%d).log
     Tooling:     $SCRIPT_DIR/$name/
 
 EOF

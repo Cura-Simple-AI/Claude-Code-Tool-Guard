@@ -49,7 +49,7 @@ Environment variables (TOOL = upper(tool_name) with '-' → '_'):
   <TOOL>_TG_NONINTERACTIVE  treat stdin as non-TTY (auto-deny on prompt)
   <TOOL>_TG_CONFIG       single-file config override (replaces all
                               merged layers; for tests)
-  <TOOL>_TG_LOG_DIR      override log dir (default: /tmp/tool-guard-logs/<tool>)
+  <TOOL>_TG_LOG_DIR      override log dir (default: /tmp/tool-guard, one file per tool/day)
   _<TOOL>_TG_ACTIVE      internal recursion sentinel; do not set manually
 
 The stub is responsible for the recursion sentinel check BEFORE
@@ -442,12 +442,13 @@ def redact(argv: list[str], secret_flags: set[str]) -> list[str]:
 
 
 def _log_file(tool_name: str) -> Path:
-    """Default log dir is /tmp/tool-guard-logs/<tool>/. /tmp is ephemeral —
-    logs are lost on devcontainer rebuild. Override <TOOL>_TG_LOG_DIR
-    for persistence."""
-    base = Path(_env(tool_name, "LOG_DIR") or f"/tmp/tool-guard-logs/{tool_name}")
+    """Default log path is /tmp/tool-guard/<tool>_YYYYMMDD.log (one
+    file per tool per day, flat layout). /tmp is ephemeral — logs are
+    lost on devcontainer rebuild. Override <TOOL>_TG_LOG_DIR to point
+    at a persistent dir."""
+    base = Path(_env(tool_name, "LOG_DIR") or "/tmp/tool-guard")
     base.mkdir(parents=True, exist_ok=True)
-    return base / f"calls-{time.strftime('%Y-%m')}.jsonl"
+    return base / f"{tool_name}_{time.strftime('%Y%m%d')}.log"
 
 
 def write_event(tool_name: str, event: dict) -> None:

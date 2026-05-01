@@ -101,8 +101,8 @@ rm -rf "$TMP_INSTALL" "$TMP_ENGINE"
 echo ""
 echo "── tg log -n validation ──"
 TMP_LOG=$(mktemp -d)
-mkdir -p "$TMP_LOG/testtool"
-cat > "$TMP_LOG/testtool/calls-2026-05.jsonl" <<'EOF'
+# New layout: flat dir, /tmp/tool-guard/<tool>_YYYYMMDD.log
+cat > "$TMP_LOG/testtool_20260501.log" <<'EOF'
 {"ts":"2026-05-01T10:00:00+0000","tool":"testtool","argv":["v"],"exit":0,"duration_ms":1,"policy":{"decision":"allow","rule":"v"}}
 {"ts":"2026-05-01T10:01:00+0000","tool":"testtool","argv":["v"],"exit":0,"duration_ms":2,"policy":{"decision":"allow","rule":"v"}}
 {"ts":"2026-05-01T10:02:00+0000","tool":"testtool","argv":["x"],"exit":13,"duration_ms":0,"policy":{"decision":"deny","rule":"x"}}

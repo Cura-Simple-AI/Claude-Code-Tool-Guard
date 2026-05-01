@@ -8,6 +8,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed (BREAKING — pre-1.0)
+- Log path layout: `/tmp/tool-guard-logs/<tool>/calls-YYYY-MM.jsonl`
+  (per-tool subdir, monthly, .jsonl) → `/tmp/tool-guard/<tool>_YYYYMMDD.log`
+  (flat dir, daily, .log). Daily rotation keeps file sizes manageable
+  for shell inspection (`grep`, `jq`); flat layout lets a single
+  `ls /tmp/tool-guard/` show all tools.
+  - Migration: existing logs in `/tmp/tool-guard-logs/` are abandoned
+    (ephemeral by design). If you set `<TOOL>_TG_LOG_DIR` to a
+    persistent path, your override stays — only the filename inside
+    that dir changes.
+
+### Added
+- `tg list` / `status` / `check` now work in installed mode too —
+  previously they only listed source-tree wrappers. `tg check` falls
+  back to `~/.local/share/tool-guard-source/` (or
+  `$TOOL_GUARD_CACHE_DIR`) when running from `/usr/local/bin/tg`.
+- `TOOL_GUARD_ENGINE_DIR` env var on each wrapper — single-dir engine
+  override, useful for hermetic tests that need to verify behaviour
+  when the engine is missing.
+- `TG_INSTALL_DIR` / `TG_ENGINE_DIR` / `TG_LOG_DIR` env overrides on
+  the `tg` CLI for testing against non-default install layouts.
+- New test suite `_tests/tg.test.sh` (25 tests) — covers list/status/
+  check/log/version/config validate in both source and installed modes.
+- Engine logging tests: filename-pattern check, every-decision-recorded
+  (allow/warn/deny/auto-deny), append (not overwrite), exit-code +
+  duration_ms capture, mkdir -p of missing log dirs, ts/parent_cmd
+  schema integrity.
+
+### Fixed
+- `tg log -n 0` and `tg log -n -N` showed *all* entries due to
+  Python's `lst[-0:]` returning the whole list. Now `-n 0` returns
+  empty (exit 0, useful for "is there a log at all?" scripts) and
+  negative N rejects with exit 2.
+
+### Changed (BREAKING — pre-1.0, original)
 - Renamed package from "wrapper(s)" to "tool-guard(s)" everywhere:
   - Directory: `scripts/wrappers/` → `scripts/tool-guard/`
   - Config dir: `.wrappers/` → `.tool-guard/`

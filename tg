@@ -48,7 +48,7 @@ VERSION = "0.1.0"
 # users who customised install.sh / uninstall.sh to a different prefix.
 INSTALL_DIR = Path(os.environ.get("TG_INSTALL_DIR", "/usr/local/bin"))
 ENGINE_DIR = Path(os.environ.get("TG_ENGINE_DIR", "/usr/local/lib/tool-guard"))
-LOG_DIR_BASE = Path(os.environ.get("TG_LOG_DIR", "/tmp/tool-guard-logs"))
+LOG_DIR_BASE = Path(os.environ.get("TG_LOG_DIR", "/tmp/tool-guard"))
 
 # Resolve PKG_ROOT relative to this script's location. Works both inside
 # the parent repo (scripts/tool-guard/) and post-extract (extracted root).
@@ -168,11 +168,13 @@ def _guard_installed(name: str) -> Path | None:
 
 
 def _log_file(name: str) -> Path | None:
-    """Most recent JSONL log file for a tool-guard, or None."""
-    d = LOG_DIR_BASE / name
-    if not d.is_dir():
+    """Most recent log file for a tool-guard, or None.
+
+    Layout: /tmp/tool-guard/<name>_YYYYMMDD.log (flat dir, one file per
+    tool per day). Sorted lexicographically picks the latest date."""
+    if not LOG_DIR_BASE.is_dir():
         return None
-    files = sorted(d.glob("calls-*.jsonl"))
+    files = sorted(LOG_DIR_BASE.glob(f"{name}_*.log"))
     return files[-1] if files else None
 
 
@@ -246,7 +248,7 @@ def cmd_status(args) -> int:
             except OSError:
                 print(f"    log:          {_yellow('?')} {log}")
         else:
-            print(f"    log:          {_dim('—')} {LOG_DIR_BASE / name}/ (no entries yet)")
+            print(f"    log:          {_dim('—')} {LOG_DIR_BASE}/{name}_*.log (no entries yet)")
         print()
 
     return 0
@@ -582,7 +584,7 @@ def cmd_log(args) -> int:
         return 2
     log = _log_file(args.tool)
     if log is None:
-        print(_dim(f"tg: no log file for {args.tool} at {LOG_DIR_BASE / args.tool}/"), file=sys.stderr)
+        print(_dim(f"tg: no log file for {args.tool} at {LOG_DIR_BASE}/{args.tool}_*.log"), file=sys.stderr)
         return 0
     try:
         with log.open() as f:

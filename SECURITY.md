@@ -92,8 +92,9 @@ Once we hit 1.0, semantic versioning applies strictly.
   serialised events exceed the OS pipe-buffer size (rare in practice
   for our event sizes; ~1 KB each). Multi-line entries are theoretically
   possible.
-- **Log files are stored under `/tmp/tool-guard-logs/`** by default, which
-  is ephemeral. For persistent audit, override `<TOOL>_TG_LOG_DIR`.
+- **Log files are stored under `/tmp/tool-guard/`** by default (one file
+  per tool/day, e.g. `az_20260501.log`), which is ephemeral. For persistent
+  audit, override `<TOOL>_TG_LOG_DIR`.
 
 ## Disclosure timeline (past advisories)
 

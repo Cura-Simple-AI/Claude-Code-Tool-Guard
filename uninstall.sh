@@ -17,7 +17,7 @@
 # Does NOT remove:
 #   - Per-user policy overrides at .tool-guard/<tool>.config.local.json
 #     — they're gitignored personal files; preserve them
-#   - Log files (/tmp/tool-guard-logs/<name>/) — kept for forensic value;
+#   - Log files (/tmp/tool-guard/<name>_*.log) — kept for forensic value;
 #     /tmp is wiped by the OS anyway
 
 set -euo pipefail
@@ -99,7 +99,7 @@ $( $REMOVE_ENGINE && echo "Engine uninstalled:    $ENGINE_DIR" )
 
 Preserved (manual cleanup if you want to wipe):
   Local configs: <repo>/.tool-guard/<name>.config.local.json (gitignored)
-  Logs:          /tmp/tool-guard-logs/<name>/  (OS clears /tmp on reboot anyway)
+  Logs:          /tmp/tool-guard/<name>_*.log  (OS clears /tmp on reboot anyway)
 
 Re-install: bash $SCRIPT_DIR/install.sh
 ────────────────────────────────────────────────────────────

@@ -204,7 +204,7 @@ write_config '{"defaultMode":"allow","allow":["*"]}'
 
 LOG_DIR=$(mktemp -d)
 tt TESTTOOL_TG_LOG_DIR="$LOG_DIR" -- version >/dev/null 2>&1
-LOG_FILE=$(ls "$LOG_DIR"/*.jsonl 2>/dev/null | head -1)
+LOG_FILE=$(ls "$LOG_DIR"/*.log 2>/dev/null | head -1)
 if [[ -f "$LOG_FILE" ]]; then pass "log file created"
 else fail "log file not created" "$LOG_DIR was empty"; fi
 
@@ -216,7 +216,7 @@ fi
 
 LOG_DIR=$(mktemp -d)
 tt TESTTOOL_TG_DISABLE=1 TESTTOOL_TG_LOG_DIR="$LOG_DIR" -- version >/dev/null 2>&1
-if [[ -z "$(ls "$LOG_DIR"/*.jsonl 2>/dev/null)" ]]; then
+if [[ -z "$(ls "$LOG_DIR"/*.log 2>/dev/null)" ]]; then
   pass "DISABLE=1 → no log written"
 else
   fail "DISABLE=1 → log unexpectedly written"
@@ -230,7 +230,7 @@ write_config '{"defaultMode":"allow","allow":["*"]}'
 
 LOG_DIR=$(mktemp -d)
 tt TESTTOOL_TG_LOG_DIR="$LOG_DIR" -- auth --password supersecret --user me >/dev/null 2>&1
-LOG_FILE=$(ls "$LOG_DIR"/*.jsonl 2>/dev/null | head -1)
+LOG_FILE=$(ls "$LOG_DIR"/*.log 2>/dev/null | head -1)
 if [[ -f "$LOG_FILE" ]] && grep -qF -- '<redacted>' "$LOG_FILE" && ! grep -qF -- 'supersecret' "$LOG_FILE"; then
   pass "secret-flag value redacted in log"
 else
@@ -239,7 +239,7 @@ fi
 
 LOG_DIR=$(mktemp -d)
 tt TESTTOOL_TG_LOG_DIR="$LOG_DIR" -- auth --password=supersecret >/dev/null 2>&1
-LOG_FILE=$(ls "$LOG_DIR"/*.jsonl 2>/dev/null | head -1)
+LOG_FILE=$(ls "$LOG_DIR"/*.log 2>/dev/null | head -1)
 if [[ -f "$LOG_FILE" ]] && grep -qF -- '--password=<redacted>' "$LOG_FILE" && ! grep -qF -- 'supersecret' "$LOG_FILE"; then
   pass "--password=value form redacted"
 else
@@ -960,6 +960,203 @@ if [[ $? -eq 0 ]]; then
 else
   fail "_normalize_rules() unit test failed"
 fi
+
+# ─── 23. Logging path layout + per-decision schema ───────────────────
+echo ""
+echo "── 23. Logging — filename layout ──"
+clear_configs
+write_config '{"defaultMode":"allow","allow":["*"]}'
+
+LOG_DIR=$(mktemp -d)
+tt TESTTOOL_TG_LOG_DIR="$LOG_DIR" -- version >/dev/null 2>&1
+LOG_FILE=$(ls "$LOG_DIR"/*.log 2>/dev/null | head -1)
+expected_name="testtool_$(date +%Y%m%d).log"
+actual_name=$(basename "$LOG_FILE" 2>/dev/null)
+if [[ "$actual_name" == "$expected_name" ]]; then
+  pass "log filename matches <tool>_YYYYMMDD.log pattern"
+else
+  fail "log filename pattern" "expected '$expected_name', got '$actual_name'"
+fi
+
+# Default log dir (no TESTTOOL_TG_LOG_DIR override) is /tmp/tool-guard/.
+# We can't easily test against the real /tmp/tool-guard/ without race
+# conditions from other test runs, so just verify the engine's
+# _log_file() picks the right base path.
+default_path=$(TOOL_GUARD_ENGINE_DIR="$ENGINE_DIR" python3 -c "
+import sys; sys.path.insert(0, '$ENGINE_DIR')
+from tool_guard import _log_file
+print(_log_file('testtool'))
+")
+case "$default_path" in
+  /tmp/tool-guard/testtool_*.log) pass "default log path is /tmp/tool-guard/<tool>_*.log" ;;
+  *) fail "default log path" "got: $default_path" ;;
+esac
+
+echo ""
+echo "── 24. Logging — every decision is recorded ──"
+clear_configs
+write_config '{
+  "defaultMode": "prompt",
+  "allow": ["good*"],
+  "warn":  [{"pattern":"warny*","message":"heads up"}],
+  "deny":  [{"pattern":"bad*","message":"nope"}]
+}'
+
+LOG_DIR=$(mktemp -d)
+# allow → exit 0 + logged
+tt TESTTOOL_TG_LOG_DIR="$LOG_DIR" -- good --action >/dev/null 2>&1
+# warn → fall through to real binary (/bin/true exit 0) + logged
+tt TESTTOOL_TG_LOG_DIR="$LOG_DIR" -- warny --action >/dev/null 2>&1
+# deny → exit 13 + logged (no real binary call)
+tt TESTTOOL_TG_LOG_DIR="$LOG_DIR" -- bad --action >/dev/null 2>&1
+# unmatched + defaultMode=prompt + non-TTY → auto-deny exit 13 + logged
+# with the special <no-match,non-interactive> rule
+tt TESTTOOL_TG_LOG_DIR="$LOG_DIR" -- mystery --action >/dev/null 2>&1
+
+LOG_FILE=$(ls "$LOG_DIR"/*.log 2>/dev/null | head -1)
+n=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
+assert_eq() { local what="$1" exp="$2" got="$3"; if [[ "$got" == "$exp" ]]; then pass "$what"; else fail "$what" "expected '$exp', got '$got'"; fi; }
+assert_eq "4 calls produce 4 log entries" "4" "$n"
+
+# Verify each call's decision is recorded by parsing JSON
+result=$(python3 - "$LOG_FILE" << 'PYEOF'
+import json, sys
+events = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+decisions = [e["policy"]["decision"] for e in events]
+print(",".join(decisions))
+PYEOF
+)
+if [[ "$result" == "allow,warn,deny,deny" ]]; then
+  pass "decisions logged in order: allow, warn, deny, deny(auto)"
+else
+  fail "decisions logged out-of-order" "got: $result"
+fi
+
+# Verify the auto-deny entry has the special <no-match,non-interactive> rule
+auto_rule=$(python3 - "$LOG_FILE" << 'PYEOF'
+import json, sys
+events = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+print(events[3]["policy"]["rule"])
+PYEOF
+)
+if [[ "$auto_rule" == "<no-match,non-interactive>" ]]; then
+  pass "auto-deny entry has <no-match,non-interactive> rule"
+else
+  fail "auto-deny rule field" "got: $auto_rule"
+fi
+
+# Schema integrity — every entry has the expected keys
+result=$(python3 - "$LOG_FILE" << 'PYEOF'
+import json, sys
+events = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+required = {"ts","tool","argv","cwd","exit","duration_ms","ppid","parent_cmd","user","policy"}
+for i, e in enumerate(events):
+    missing = required - set(e.keys())
+    if missing:
+        print(f"entry-{i}-missing:{','.join(sorted(missing))}"); sys.exit(1)
+    if "decision" not in e["policy"]:
+        print(f"entry-{i}-missing-decision"); sys.exit(1)
+print("ok")
+PYEOF
+)
+assert_eq "every entry has required schema keys" "ok" "$result"
+
+echo ""
+echo "── 25. Logging — appends, never overwrites ──"
+clear_configs
+write_config '{"defaultMode":"allow","allow":["*"]}'
+
+LOG_DIR=$(mktemp -d)
+for i in 1 2 3 4 5; do
+  tt TESTTOOL_TG_LOG_DIR="$LOG_DIR" -- call$i >/dev/null 2>&1
+done
+LOG_FILE=$(ls "$LOG_DIR"/*.log 2>/dev/null | head -1)
+n=$(wc -l < "$LOG_FILE")
+assert_eq "5 sequential calls → 5 entries (append, not overwrite)" "5" "$n"
+
+# argv arg appears in matching call only
+for i in 1 2 3 4 5; do
+  if grep -q "\"call$i\"" "$LOG_FILE"; then
+    pass "call$i appears in log"
+  else
+    fail "call$i missing from log"
+  fi
+done
+
+echo ""
+echo "── 26. Logging — exit code captured for both success and failure ──"
+clear_configs
+write_config '{"defaultMode":"allow","allow":["*"]}'
+
+LOG_DIR=$(mktemp -d)
+# allow + /bin/true → exit 0
+tt TESTTOOL_TG_LOG_DIR="$LOG_DIR" TESTTOOL_TG_REAL_BIN=/bin/true -- ok >/dev/null 2>&1
+# allow + /bin/false → exit 1
+tt TESTTOOL_TG_LOG_DIR="$LOG_DIR" TESTTOOL_TG_REAL_BIN=/bin/false -- fails >/dev/null 2>&1
+LOG_FILE=$(ls "$LOG_DIR"/*.log 2>/dev/null | head -1)
+codes=$(python3 - "$LOG_FILE" << 'PYEOF'
+import json, sys
+events = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+print(",".join(str(e["exit"]) for e in events))
+PYEOF
+)
+assert_eq "exit codes captured: 0 then 1" "0,1" "$codes"
+
+# duration_ms is an integer ≥ 0
+durations_ok=$(python3 - "$LOG_FILE" << 'PYEOF'
+import json, sys
+for e in [json.loads(l) for l in open(sys.argv[1]) if l.strip()]:
+    d = e.get("duration_ms")
+    if not isinstance(d, int) or d < 0:
+        print(f"bad-duration:{d}"); sys.exit(1)
+print("ok")
+PYEOF
+)
+assert_eq "duration_ms is non-negative int" "ok" "$durations_ok"
+
+echo ""
+echo "── 27. Logging — TG_LOG_DIR mkdir -p when missing ──"
+clear_configs
+write_config '{"defaultMode":"allow","allow":["*"]}'
+
+LOG_DIR_BASE=$(mktemp -d)
+LOG_DIR="$LOG_DIR_BASE/nested/deeper/path"  # does not yet exist
+tt TESTTOOL_TG_LOG_DIR="$LOG_DIR" -- version >/dev/null 2>&1
+if [[ -d "$LOG_DIR" ]] && ls "$LOG_DIR"/*.log >/dev/null 2>&1; then
+  pass "engine creates missing log dir tree"
+else
+  fail "engine did not create $LOG_DIR" "$(ls -la "$LOG_DIR_BASE" 2>&1 | head -3)"
+fi
+rm -rf "$LOG_DIR_BASE"
+
+echo ""
+echo "── 28. Logging — ts is ISO-8601-ish + parent_cmd populated ──"
+clear_configs
+write_config '{"defaultMode":"allow","allow":["*"]}'
+
+LOG_DIR=$(mktemp -d)
+tt TESTTOOL_TG_LOG_DIR="$LOG_DIR" -- version >/dev/null 2>&1
+LOG_FILE=$(ls "$LOG_DIR"/*.log 2>/dev/null | head -1)
+ts_ok=$(python3 - "$LOG_FILE" << 'PYEOF'
+import json, sys, re
+e = json.loads(open(sys.argv[1]).readline())
+ts = e["ts"]
+# YYYY-MM-DDTHH:MM:SS+HHMM (or -HHMM)
+if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{4}$", ts):
+    print("ok")
+else:
+    print(f"bad-ts:{ts}")
+PYEOF
+)
+assert_eq "ts matches ISO-8601 with timezone" "ok" "$ts_ok"
+
+parent_ok=$(python3 - "$LOG_FILE" << 'PYEOF'
+import json, sys
+e = json.loads(open(sys.argv[1]).readline())
+print("ok" if e.get("parent_cmd") else "missing-parent_cmd")
+PYEOF
+)
+assert_eq "parent_cmd populated" "ok" "$parent_ok"
 
 # ─── Result ──────────────────────────────────────────────────────────
 echo ""

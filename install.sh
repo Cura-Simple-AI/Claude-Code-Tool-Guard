@@ -23,9 +23,9 @@
 # clobber a user-installed real CLI).
 #
 # Usage:
-#   bash scripts/tool-guard/install.sh             # install engine + all tool-guard
+#   bash scripts/tool-guard/install.sh             # install engine + all tool-guards
 #   bash scripts/tool-guard/install.sh az          # install engine + only the az tool-guard
-#   bash scripts/tool-guard/install.sh az git      # install engine + named tool-guard
+#   bash scripts/tool-guard/install.sh az git      # install engine + named tool-guards
 #
 # Note: must be run by a human user (uses sudo for /usr/local/* writes).
 
@@ -63,7 +63,7 @@ else
   done
 fi
 
-[ "${#TARGETS[@]}" -gt 0 ] || err "No tool-guard found under $SCRIPT_DIR/*/wrapper.py"
+[ "${#TARGETS[@]}" -gt 0 ] || err "No tool-guards found under $SCRIPT_DIR/*/wrapper.py"
 
 # Install the engine first — every stub needs it.
 info "Installing engine: $ENGINE_SRC → $ENGINE_DST"
@@ -81,7 +81,7 @@ else
 fi
 echo
 
-info "Installing tool-guard: ${TARGETS[*]}"
+info "Installing tool-guards: ${TARGETS[*]}"
 echo
 
 for name in "${TARGETS[@]}"; do
@@ -122,7 +122,7 @@ cat <<EOF
 
 ────────────────────────────────────────────────────────────
 Engine installed: $ENGINE_DST
-Tool-guard installed: ${TARGETS[*]}
+Tool-guards installed: ${TARGETS[*]}
 
 Per-tool-guard details:
 EOF

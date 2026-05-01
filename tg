@@ -10,11 +10,11 @@ Usage:
   tg <command> [args...]
 
 Commands:
-  list                    list installed tool-guard + the engine
+  list                    list installed tool-guards + the engine
   status [tool]           show install + config + log status (all tools, or one)
   check <tool> <args...>  dry-run classify a command (no exec)
-  install [name...]       install engine + named tool-guard (delegates to install.sh)
-  uninstall [name...]     uninstall named tool-guard + engine (delegates to uninstall.sh)
+  install [name...]       install engine + named tool-guards (delegates to install.sh)
+  uninstall [name...]     uninstall named tool-guards + engine (delegates to uninstall.sh)
   log <tool> [-n N]       show last N log entries (default 10)
   config show <tool>      print the merged effective config for a tool
   add <tool>              scaffold a new tool-guard (stub + example config)
@@ -75,7 +75,7 @@ def _dim(s: str) -> str:    return _c(s, "2")
 
 
 def _discover_guards() -> list[str]:
-    """List tool-guard names from PKG_ROOT/<name>/wrapper.py. Skips _-prefixed dirs."""
+    """List tool-guards' names from PKG_ROOT/<name>/wrapper.py. Skips _-prefixed dirs."""
     names = []
     for d in sorted(PKG_ROOT.iterdir()):
         if not d.is_dir() or d.name.startswith("_") or d.name.startswith("."):
@@ -139,8 +139,8 @@ def _log_file(name: str) -> Path | None:
 
 
 def cmd_list(_args) -> int:
-    """List discoverable tool-guard + their installed status."""
-    print(f"{_bold('Tool-guard in package')} ({PKG_ROOT}):")
+    """List discoverable tool-guards + their installed status."""
+    print(f"{_bold('Tool-guards in package')} ({PKG_ROOT}):")
     guards = _discover_guards()
     if not guards:
         print(_dim("  (none discovered)"))
@@ -363,7 +363,7 @@ def cmd_config_init(args) -> int:
 
 
 def cmd_config_validate(args) -> int:
-    """Validate one or all tool-guard config files. Reports JSON syntax errors,
+    """Validate one or all tool-guards' config files. Reports JSON syntax errors,
     schema issues, and unknown defaultMode values."""
     cwd_dir = _find_guards_dir()
     if cwd_dir is None:
@@ -800,7 +800,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"tool-guard {VERSION}")
     sp = p.add_subparsers(dest="cmd", metavar="<command>")
 
-    sp_list = sp.add_parser("list", help="list installed tool-guard")
+    sp_list = sp.add_parser("list", help="list installed tool-guards")
     sp_list.set_defaults(func=cmd_list)
 
     sp_status = sp.add_parser("status", help="show install + config + log status")
@@ -812,11 +812,11 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_check.add_argument("args", nargs=argparse.REMAINDER, help="argv to classify")
     sp_check.set_defaults(func=cmd_check)
 
-    sp_install = sp.add_parser("install", help="install engine + named tool-guard")
+    sp_install = sp.add_parser("install", help="install engine + named tool-guards")
     sp_install.add_argument("names", nargs="*", help="tool-guard to install (default: all)")
     sp_install.set_defaults(func=cmd_install)
 
-    sp_uninstall = sp.add_parser("uninstall", help="uninstall named tool-guard + engine")
+    sp_uninstall = sp.add_parser("uninstall", help="uninstall named tool-guards + engine")
     sp_uninstall.add_argument("names", nargs="*", help="tool-guard to remove (default: all)")
     sp_uninstall.set_defaults(func=cmd_uninstall)
 

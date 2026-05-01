@@ -7,12 +7,12 @@
 # CLI that someone manually installed there.
 #
 # Usage:
-#   bash scripts/tool-guard/uninstall.sh           # remove engine + all tool-guard
+#   bash scripts/tool-guard/uninstall.sh           # remove engine + all tool-guards
 #   bash scripts/tool-guard/uninstall.sh az        # remove only the az tool-guard (engine stays)
-#   bash scripts/tool-guard/uninstall.sh az git    # remove named tool-guard (engine stays)
+#   bash scripts/tool-guard/uninstall.sh az git    # remove named tool-guards (engine stays)
 #
 # The engine is removed only when no targets are passed (full uninstall).
-# Removing engine while tool-guard still exist would break them.
+# Removing engine while tool-guards still exist would break them.
 #
 # Does NOT remove:
 #   - Per-user policy overrides at .tool-guard/<tool>.config.local.json
@@ -45,9 +45,9 @@ else
   REMOVE_ENGINE=true
 fi
 
-[ "${#TARGETS[@]}" -gt 0 ] || err "No tool-guard found to uninstall."
+[ "${#TARGETS[@]}" -gt 0 ] || err "No tool-guards found to uninstall."
 
-info "Uninstalling tool-guard: ${TARGETS[*]}"
+info "Uninstalling tool-guards: ${TARGETS[*]}"
 echo
 
 for name in "${TARGETS[@]}"; do
@@ -94,7 +94,7 @@ fi
 cat <<EOF
 
 ────────────────────────────────────────────────────────────
-Tool-guard uninstalled: ${TARGETS[*]}
+Tool-guards uninstalled: ${TARGETS[*]}
 $( $REMOVE_ENGINE && echo "Engine uninstalled:    $ENGINE_DIR" )
 
 Preserved (manual cleanup if you want to wipe):

@@ -5,7 +5,7 @@
 [![Python: 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
 
 > **Generic policy enforcement for CLI tools — built for AI agents
-> like Claude Code.** Drop-in tool-guard for `az`, `git`, `gh`,
+> like Claude Code.** Drop-in tool-guards for `az`, `git`, `gh`,
 > `sleep`, … with allow / warn / deny rules, custom messages,
 > structured audit logs, an interactive prompt for unknown commands,
 > and a shared engine that's <600 lines of pure-stdlib Python.
@@ -93,18 +93,18 @@ That's it. Everything below is detail.
 
 ## The `tg` management CLI
 
-`tg` is installed alongside the tool-guard and provides convenient
+`tg` is installed alongside the tool-guards and provides convenient
 inspection, dry-run, and management commands:
 
 ```bash
-tg list                                      # what tool-guard are installed
+tg list                                      # what tool-guards are installed
 tg status [tool]                             # install + config + log status
 tg check az repos pr create --title "test"   # dry-run classify (allow/deny/warn/prompt)
 tg log az -n 20                              # last 20 log entries, colored
 tg config show git                           # print merged effective config
 tg add gh                                    # scaffold a new tool-guard
 tg test                                      # run all test suites
-tg install [name...]                         # install engine + tool-guard
+tg install [name...]                         # install engine + tool-guards
 tg uninstall [name...]                       # uninstall (engine removed only on full uninstall)
 tg help [command]                            # help (general or per-command)
 ```
@@ -250,7 +250,7 @@ The installer:
 - Uses `sudo` for the writes — must be run by a human user.
 
 ```bash
-bash install.sh         # engine + all tool-guard
+bash install.sh         # engine + all tool-guards
 bash install.sh az      # engine + just az
 bash uninstall.sh       # symmetric removal
 ```

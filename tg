@@ -569,13 +569,178 @@ def _fetch_rule_message(tool: str, rule_pattern: str) -> str | None:
     return None
 
 
+INSTALL_HINTS = {
+    "az":    "curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash",
+    "gh":    "See https://github.com/cli/cli/blob/trunk/docs/install_linux.md  (or: sudo apt install gh)",
+    "git":   "sudo apt install git",
+    "sleep": "ships with coreutils — should be present (check that /usr/bin is in PATH)",
+}
+
+
+def _which_all(name: str) -> list[str]:
+    """Return all PATH entries for `name` in order, like `which -a`. Empty
+    list if not found. We don't use shutil.which() because it returns only
+    the first match and we need to skip our own wrapper at INSTALL_DIR."""
+    out = []
+    seen = set()
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        if not d:
+            continue
+        cand = Path(d) / name
+        try:
+            if cand.is_file() and os.access(cand, os.X_OK):
+                rp = str(cand.resolve())
+                if rp in seen:
+                    continue
+                seen.add(rp)
+                out.append(str(cand))
+        except OSError:
+            continue
+    return out
+
+
+def _discover_real_binary(tool: str) -> str | None:
+    """Find the real binary for `tool`, EXCLUDING our own wrapper at
+    INSTALL_DIR/<tool>. Priority:
+      1. INSTALL_DIR/<tool>-real (the canonical "I moved my custom build
+         out of the way" location — `which` won't find it, suffixed name)
+      2. which -a <tool>, skipping INSTALL_DIR/<tool>"""
+    real_suffix = INSTALL_DIR / f"{tool}-real"
+    if real_suffix.is_file() and os.access(real_suffix, os.X_OK):
+        return str(real_suffix)
+    our_path = INSTALL_DIR / tool
+    for path in _which_all(tool):
+        # Skip our own wrapper if it's already installed (post-install
+        # re-run shouldn't pick the wrapper as the real binary).
+        if path == str(our_path):
+            continue
+        try:
+            if our_path.exists() and Path(path).resolve() == our_path.resolve():
+                continue
+        except OSError:
+            pass
+        return path
+    return None
+
+
+def _is_our_wrapper(path: Path) -> bool:
+    """True if `path` looks like one of our installed wrappers (Python +
+    references tool_guard / TG_ACTIVE token in the first 2 KB)."""
+    try:
+        with path.open("rb") as f:
+            head = f.read(2048)
+    except OSError:
+        return False
+    if not head.startswith(b"#!") or b"python" not in head.split(b"\n", 1)[0]:
+        return False
+    return b"tool_guard" in head or b"TG_ACTIVE" in head
+
+
+def _patch_real_bin(stub: Path, tool: str, real: str) -> tuple[bool, str]:
+    """Sed-replace the stub's REAL_BIN default so the installed binary
+    has the discovered real path baked in. Returns (patched, message).
+    Idempotent: if the default already matches, returns (False, msg)."""
+    upper = tool.upper().replace("-", "_")
+    default_path = f"/usr/bin/{tool}"
+    if real == default_path:
+        return (False, f"default real_bin {default_path} matches — no patch needed")
+    try:
+        text = stub.read_text(encoding="utf-8")
+    except OSError as e:
+        return (False, f"could not read {stub}: {e}")
+    needle = f'os.environ.get("{upper}_TG_REAL_BIN", "{default_path}")'
+    replacement = f'os.environ.get("{upper}_TG_REAL_BIN", "{real}")'
+    if needle not in text:
+        return (False, f"could not find expected pattern in {stub} — proceeding without patch")
+    stub.write_text(text.replace(needle, replacement), encoding="utf-8")
+    return (True, f"patched stub default: {default_path} → {real}")
+
+
 def cmd_install(args) -> int:
-    """Delegate to install.sh."""
+    """Pre-flight discover + REAL_BIN patch + delegate to install.sh.
+
+    For each requested (or auto-discovered) tool guard:
+      1. Refuse if INSTALL_DIR/<name> exists and is NOT our wrapper
+         (would shadow the user's real binary). Suggest mv-to-<name>-real.
+      2. Find the real binary via `which -a` (or <name>-real fallback);
+         skip with an install hint if not on PATH.
+      3. Sed-patch the stub's REAL_BIN default to the discovered path.
+      4. Hand the surviving names to install.sh for the actual sudo install.
+
+    The pre-flight + patch logic used to live in tool-guard-install.sh —
+    moving it here lets the bootstrap script be ~30 lines (clone + exec
+    tg install) and keeps install logic where it can be unit-tested."""
+    if _is_installed_mode():
+        print(_red("tg install: already running from /usr/local/bin (installed mode); "
+                   "run from a source clone (e.g. ~/.local/share/tool-guard-source/) to install."),
+              file=sys.stderr)
+        return 1
+
     script = PKG_ROOT / "install.sh"
     if not script.is_file():
-        print(_red(f"tg: install.sh not found at {script}"), file=sys.stderr)
+        print(_red(f"tg install: install.sh not found at {script}"), file=sys.stderr)
         return 1
-    return subprocess.run(["bash", str(script), *args.names]).returncode
+
+    # Targets: explicit names, or all discoverable tool guards in source tree.
+    targets = list(args.names) if args.names else _discover_guards()
+    if not targets:
+        print(_red(f"tg install: no tool-guards found under {PKG_ROOT}/*/wrapper.py"),
+              file=sys.stderr)
+        return 1
+
+    print(_bold(f"Pre-flight discovery for: {' '.join(targets)}"))
+    print()
+
+    survivors: list[str] = []
+    skipped: list[str] = []
+
+    for name in targets:
+        stub = PKG_ROOT / name / "wrapper.py"
+        if not stub.is_file():
+            print(_yellow(f"⚠  {name}: not in package (no {stub}) — skipping"), file=sys.stderr)
+            skipped.append(f"{name} (unknown)")
+            continue
+
+        # Reject if INSTALL_DIR/<name> is some non-wrapper binary (would shadow it)
+        installed_path = INSTALL_DIR / name
+        if installed_path.exists() and not _is_our_wrapper(installed_path):
+            print(_yellow(f"⚠  {name}: {installed_path} exists and is NOT our wrapper "
+                          f"(looks like a real binary)."), file=sys.stderr)
+            print(f"     Installing here would shadow it. Move it aside first:")
+            print(f"       sudo mv {installed_path} {installed_path}-real")
+            print(f"     Then re-run — REAL_BIN default will be patched to point at it.")
+            skipped.append(name)
+            continue
+
+        # Find the real binary; skip with install hint if missing
+        real = _discover_real_binary(name)
+        if not real:
+            hint = INSTALL_HINTS.get(name, "(no install hint registered — install it manually)")
+            print(_yellow(f"⚠  {name}: not installed on this system."), file=sys.stderr)
+            print(f"     To install: {hint}")
+            skipped.append(name)
+            continue
+
+        print(_green(f"✅ {name}: real binary found at {real}"))
+
+        # Patch the stub's REAL_BIN default
+        patched, msg = _patch_real_bin(stub, name, real)
+        print(f"   {msg}")
+
+        survivors.append(name)
+
+    print()
+    if not survivors:
+        print(_red("tg install: nothing to install (all skipped). See messages above."),
+              file=sys.stderr)
+        return 1
+    if skipped:
+        print(_yellow(f"⚠  Skipping: {', '.join(skipped)}"), file=sys.stderr)
+        print()
+
+    print(_bold(f"Delegating install of: {' '.join(survivors)}"))
+    print()
+    return subprocess.run(["bash", str(script), *survivors]).returncode
 
 
 def cmd_uninstall(args) -> int:

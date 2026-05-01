@@ -173,6 +173,160 @@ else fail "config validate fails on invalid file" "exit was 0"; fi
 assert_contains "config validate error mentions defaultMode" "defaultMode" "$out"
 rm -rf "$TMP_CFG"
 
+# ─── tg install — pre-flight discovery + REAL_BIN patching ──────────
+echo ""
+echo "── tg install — pre-flight discovery (dry-fakes install.sh) ──"
+
+# Build a sandbox PKG_ROOT that contains a fake install.sh + a fake
+# tool-guard subdir (some-tool/wrapper.py). install.sh just echoes args
+# and exit 0 — we're testing the pre-flight + patching, not the actual
+# sudo-install path.
+SANDBOX=$(mktemp -d)
+cp "$TG" "$SANDBOX/tg"
+chmod +x "$SANDBOX/tg"
+# Fake engine file (some commands need it to exist as a sentinel)
+touch "$SANDBOX/tool_guard.py"
+# Fake install.sh that records what it was called with
+cat > "$SANDBOX/install.sh" <<'EOF'
+#!/bin/bash
+echo "FAKE_INSTALL_SH_CALLED_WITH:$*"
+EOF
+chmod +x "$SANDBOX/install.sh"
+
+# Make a tool-guard called 'fakeguard' that points at /bin/echo (always
+# exists) so pre-flight discovery succeeds + REAL_BIN patching has
+# something real to point to.
+mkdir -p "$SANDBOX/fakeguard"
+cat > "$SANDBOX/fakeguard/wrapper.py" <<'EOF'
+#!/usr/bin/env python3
+"""fakeguard — tool guard test stub."""
+import os, sys
+TOOL = "fakeguard"
+REAL = os.environ.get("FAKEGUARD_TG_REAL_BIN", "/usr/bin/fakeguard")
+if os.environ.get("_FAKEGUARD_TG_ACTIVE"):
+    os.execv(REAL, [REAL] + sys.argv[1:])
+os.environ["_FAKEGUARD_TG_ACTIVE"] = "1"
+EOF
+chmod +x "$SANDBOX/fakeguard/wrapper.py"
+
+# Make a second tool guard 'noexisttool' that points at a binary that's
+# not on PATH — pre-flight should skip it with an install hint.
+mkdir -p "$SANDBOX/noexisttool"
+cat > "$SANDBOX/noexisttool/wrapper.py" <<'EOF'
+#!/usr/bin/env python3
+"""noexisttool — tool guard test stub for missing-binary case."""
+import os, sys
+TOOL = "noexisttool"
+REAL = os.environ.get("NOEXISTTOOL_TG_REAL_BIN", "/usr/bin/noexisttool")
+EOF
+chmod +x "$SANDBOX/noexisttool/wrapper.py"
+
+# Need a tmpdir for INSTALL_DIR so we don't touch /usr/local/bin
+TMP_INSTALL=$(mktemp -d)
+TMP_ENGINE=$(mktemp -d)
+# Engine sentinel file (so _engine_installed is truthy, makes some commands not error)
+touch "$TMP_ENGINE/tool_guard.py"
+
+# Constrained PATH that contains /bin (where /bin/echo lives, our
+# stand-in real binary for fakeguard) but NOT a path that has
+# noexisttool — and NOT TMP_INSTALL (so we're testing the "not yet
+# installed" code path).
+RUN_PATH="/bin:/usr/bin"
+
+run_tg_install() {
+  TG_INSTALL_DIR="$TMP_INSTALL" TG_ENGINE_DIR="$TMP_ENGINE" \
+    PATH="$RUN_PATH" "$SANDBOX/tg" install "$@" 2>&1
+}
+
+# 1. fakeguard exists (via /bin/echo simulating /usr/bin/fakeguard)
+#    → patches stub + delegates to install.sh
+# But wait — fakeguard isn't actually a binary on RUN_PATH. We need
+# it to exist somewhere _which_all looks. Easiest: copy /bin/echo as
+# /tmp/fake-binary-dir/fakeguard, prepend that dir to PATH.
+FAKE_BIN_DIR=$(mktemp -d)
+cp /bin/echo "$FAKE_BIN_DIR/fakeguard"
+RUN_PATH="$FAKE_BIN_DIR:$RUN_PATH"
+
+out=$(run_tg_install fakeguard 2>&1)
+ec=$?
+assert_eq "fakeguard install — exit code" "0" "$ec"
+assert_contains "fakeguard discovered real binary" "real binary found at $FAKE_BIN_DIR/fakeguard" "$out"
+assert_contains "fakeguard patched stub" "patched stub default" "$out"
+assert_contains "delegates to install.sh" "FAKE_INSTALL_SH_CALLED_WITH:fakeguard" "$out"
+
+# Verify the stub was actually patched (REAL_BIN now points at FAKE_BIN_DIR/fakeguard)
+if grep -qF "$FAKE_BIN_DIR/fakeguard" "$SANDBOX/fakeguard/wrapper.py"; then
+  pass "stub file content reflects patched REAL_BIN"
+else
+  fail "stub file not patched" "content: $(cat $SANDBOX/fakeguard/wrapper.py)"
+fi
+
+# 2. noexisttool — pre-flight finds nothing → skip with install hint,
+#    install.sh NOT called for it
+out=$(run_tg_install noexisttool 2>&1)
+ec=$?
+assert_eq "noexisttool install — exit code (no survivors → 1)" "1" "$ec"
+assert_contains "noexisttool — install hint shown" "not installed on this system" "$out"
+if echo "$out" | grep -qF "FAKE_INSTALL_SH_CALLED_WITH"; then
+  fail "install.sh should not have been called" "got: $out"
+else
+  pass "install.sh NOT called when no tools survive pre-flight"
+fi
+
+# 3. INSTALL_DIR/<name> exists and is a non-wrapper binary → refuse + suggest mv
+echo "fake real binary, not a wrapper" > "$TMP_INSTALL/fakeguard"
+chmod +x "$TMP_INSTALL/fakeguard"
+out=$(run_tg_install fakeguard 2>&1)
+ec=$?
+assert_eq "conflict — exit code" "1" "$ec"
+assert_contains "conflict — suggests mv to -real" "sudo mv $TMP_INSTALL/fakeguard $TMP_INSTALL/fakeguard-real" "$out"
+rm -f "$TMP_INSTALL/fakeguard"
+
+# 4. INSTALL_DIR/<name>-real already exists → use it as REAL_BIN
+cp /bin/echo "$TMP_INSTALL/fakeguard-real"
+# Restore stub so we can re-patch
+cat > "$SANDBOX/fakeguard/wrapper.py" <<'EOF'
+#!/usr/bin/env python3
+"""fakeguard — tool guard test stub."""
+import os, sys
+TOOL = "fakeguard"
+REAL = os.environ.get("FAKEGUARD_TG_REAL_BIN", "/usr/bin/fakeguard")
+if os.environ.get("_FAKEGUARD_TG_ACTIVE"):
+    os.execv(REAL, [REAL] + sys.argv[1:])
+os.environ["_FAKEGUARD_TG_ACTIVE"] = "1"
+EOF
+out=$(run_tg_install fakeguard 2>&1)
+assert_contains "<name>-real is preferred over PATH lookup" "real binary found at $TMP_INSTALL/fakeguard-real" "$out"
+rm -f "$TMP_INSTALL/fakeguard-real"
+
+# 5. Running from /usr/local/bin (installed mode) is rejected with a
+#    helpful message — install needs the source tree.
+INSTALLED_TG=$(mktemp -d)
+cp "$TG" "$INSTALLED_TG/tg"
+chmod +x "$INSTALLED_TG/tg"
+# Force PKG_ROOT to look like the installed location
+out=$(TG_INSTALL_DIR="$INSTALLED_TG" TG_ENGINE_DIR="$TMP_ENGINE" \
+      "$INSTALLED_TG/tg" install fakeguard 2>&1)
+ec=$?
+assert_eq "installed-mode install — exit 1" "1" "$ec"
+assert_contains "installed-mode install — clear error" "already running from" "$out"
+rm -rf "$INSTALLED_TG"
+
+# 6. Auto-discover (no args): all tool guards in PKG_ROOT get pre-flight
+# Restore stub default
+cat > "$SANDBOX/fakeguard/wrapper.py" <<'EOF'
+#!/usr/bin/env python3
+"""fakeguard — tool guard test stub."""
+import os, sys
+TOOL = "fakeguard"
+REAL = os.environ.get("FAKEGUARD_TG_REAL_BIN", "/usr/bin/fakeguard")
+EOF
+out=$(run_tg_install 2>&1)
+assert_contains "auto-discover sees fakeguard" "fakeguard" "$out"
+assert_contains "auto-discover sees noexisttool" "noexisttool" "$out"
+
+rm -rf "$SANDBOX" "$TMP_INSTALL" "$TMP_ENGINE" "$FAKE_BIN_DIR"
+
 # ─── Result ──────────────────────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════════════════════"

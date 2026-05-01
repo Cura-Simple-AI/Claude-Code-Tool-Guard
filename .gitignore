@@ -1,5 +1,5 @@
 # Per-user tool-guard policy overrides — populated by the prompt-mode 'save' actions
-.tool-guards/*.local.json
+.tool-guard/*.local.json
 
 # Python bytecode
 __pycache__/

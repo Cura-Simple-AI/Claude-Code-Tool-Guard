@@ -1,34 +1,16 @@
 #!/usr/bin/env python3
-"""sleep tool-guard — numeric guard, NOT delegating to tool_guard.
+"""sleep tool-guard — numeric guard, self-contained (does not use the engine).
 
-Pattern-matched policy doesn't fit `sleep N` (we'd need a numeric
-matcher). This stub does its own minimal validation: parse all
-durations from argv, sum them, compare against threshold, block if
-exceeded AND running under a Claude ancestor. Otherwise delegate
-transparently to /usr/bin/sleep.
+Sums all argv durations (`sleep 1 30s 2m` = 151s) and blocks if the
+total exceeds SLEEP_TG_MAX seconds AND a Claude ancestor is detected.
+Long sleeps under Claude block the conversation — ScheduleWakeup /
+CronCreate are the right tool for waits >30s.
 
-GNU sleep accepts multiple duration args and sums them:
-  `sleep 1 30s 2m`  →  1 + 30 + 120 = 151 seconds.
-The tool-guard sums the same way so `sleep 5 999` cannot sneak past a
-"only check args[0]" check.
-
-Numeric-validator pattern with Claude-ancestor gating, adapted from
-prior art.
-
-Why block under Claude only? Long sleeps in interactive shells are
-fine; long sleeps inside a Claude session block the entire
-conversation. The user can't talk to Claude while a sleep is pending.
-Claude has ScheduleWakeup and CronCreate for waits >30s — use those
-instead.
-
-Environment variables:
-  SLEEP_TG_MAX        max seconds allowed under Claude (default 30)
-  SLEEP_TG_REAL_BIN   override /usr/bin/sleep (e.g. for tests)
-  _SLEEP_TG_ACTIVE    internal recursion sentinel
+Env:
+  SLEEP_TG_MAX        max seconds under Claude (default 30, max 300)
+  SLEEP_TG_REAL_BIN   override /usr/bin/sleep
 """
-# TOOL_GUARD_STUB_v1 — canonical magic line. See az/wrapper.py header.
-# (Sleep is a numeric guard, not engine-based, but uses the same marker
-# so detection helpers treat it consistently.)
+# TOOL_GUARD_STUB_v1 — canonical magic line.
 from __future__ import annotations
 
 import os
@@ -37,11 +19,8 @@ import sys
 
 REAL_SLEEP = os.environ.get("SLEEP_TG_REAL_BIN", "/usr/bin/sleep")  # TG_REAL_BIN_DEFAULT
 
-# Defensive parsing of SLEEP_TG_MAX — a typo in the env value should
-# warn + fall back to the default rather than crash the tool-guard.
-# Hard-capped at 300s (5 min): SLEEP_TG_MAX=999999 was effectively
-# disabling the sleep guard (P2 finding from security audit). Allow
-# tuning the threshold for legitimate workflows but not arbitrarily.
+# SLEEP_TG_MAX hard-capped at 300s — without an upper bound, setting it
+# to 999999 effectively disables the guard.
 _HARD_MAX = 300
 _max_raw = os.environ.get("SLEEP_TG_MAX", "30")
 try:
@@ -65,11 +44,6 @@ except ValueError:
         file=sys.stderr,
     )
     MAX_SECS = 30
-
-# Recursion shortcut removed (security review P1): env-var sentinel
-# was a bypass vector. Sleep is a leaf binary that doesn't recurse,
-# so re-running the validator on a hypothetical recursive call is
-# both safe and effectively never happens in practice.
 
 _DURATION_RE = re.compile(r"^(\d+(?:\.\d+)?)([smhd]?)$")
 _UNITS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}

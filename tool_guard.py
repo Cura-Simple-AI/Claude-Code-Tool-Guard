@@ -109,18 +109,14 @@ def _is_interactive(tool_name: str) -> bool:
         return False
 
 
-# Test-mode gate. Quinn round-2 P1: env-only gating is bypassable by
-# any process that can set env vars (Claude can). The file requirement
-# raises the bar to "process needed sudo at some prior point" — which
-# in real deployments is a sysadmin opt-in, not something an AI agent
-# does in passing. Both must be true:
-#   1. TG_TEST_MODE=1 env var (intent — easy to set, easy to grep for)
-#   2. /etc/tool-guard/test-mode-enabled file exists (capability — sudo)
+# Test-mode gate. Both required so an AI agent can't enable it just
+# by setting an env var: the file requires sudo to create.
+#   1. TG_TEST_MODE=1 env var (intent)
+#   2. /etc/tool-guard/test-mode-enabled file (capability — sudo)
 TG_TEST_MODE_FILE = "/etc/tool-guard/test-mode-enabled"
 
 
 def _test_mode_active() -> bool:
-    """True iff test mode is enabled. See TG_TEST_MODE_FILE comment."""
     return (os.environ.get("TG_TEST_MODE") == "1"
             and os.path.isfile(TG_TEST_MODE_FILE))
 
@@ -196,10 +192,8 @@ def _find_guards_dir(start: Path | None = None) -> Path | None:
     walk-up reaches / without finding anything and the engine falls
     back to embedded deny-all. Returns None only if no candidate exists.
 
-    Quinn round-2 P1: TOOL_GUARD_DIR is gated behind test mode. Without
-    the gate, an attacker could redirect policy lookup to a permissive
-    config dir they control. Production paths (walk-up + home fallback)
-    remain unaffected."""
+    TOOL_GUARD_DIR is test-mode-gated: an unguarded override would let
+    any process redirect policy lookup to a permissive config dir."""
     explicit = os.environ.get("TOOL_GUARD_DIR")
     if explicit and _test_mode_active():
         p = Path(explicit)
@@ -495,11 +489,8 @@ def redact(argv: list[str], secret_flags: set[str]) -> list[str]:
     """Replace values immediately following secret-bearing flags with <redacted>.
     Handles both `--password value` and `--password=value` forms.
 
-    Flag matching is CASE-INSENSITIVE for redaction (P2 finding from
-    security audit): a user passing `--Password=secret` would otherwise
-    leak the value into the audit log because `--Password` doesn't match
-    `--password` exactly. Original argv casing is preserved in output;
-    only the membership check is normalized."""
+    Flag matching is case-insensitive (so `--Password=secret` doesn't
+    leak); original argv casing is preserved in output."""
     secret_flags_lower = {f.lower() for f in secret_flags}
     out: list[str] = []
     skip_next = False
@@ -576,10 +567,8 @@ def prompt_user(tool_name: str, argv: list[str]) -> tuple[str, bool]:
         if choice == "a":
             return "allow", False
         if choice == "A":
-            # P2 finding: derive_pattern("*") (empty argv) would persist
-            # an allow-everything rule with one keystroke. Require an
-            # explicit second confirmation when the pattern is overly
-            # broad ("*" matches every command).
+            # `*` would allow every future call — require explicit
+            # confirmation rather than persist on a single keystroke.
             if suggested == "*":
                 sys.stderr.write(
                     f"  ⚠ Suggested pattern '*' matches ALL commands. "
@@ -769,21 +758,14 @@ def run(
     """
     secret_flags = frozenset(secret_flags)
 
-    # NOTE: env-var sentinel ("_<TOOL>_TG_ACTIVE") was previously used
-    # as a recursion-bypass optimization. Removed (P1 finding from
-    # security audit): env vars are user-poisonable, so any sentinel
-    # value the engine trusts becomes a bypass vector. The performance
-    # cost of running policy on legitimate recursion (rare — most CLIs
-    # don't self-invoke) is ~1ms per call, well below the noise floor.
+    # No env-var sentinel for recursion: any value the engine trusts
+    # is user-poisonable. ~1ms cost per legitimate recursion is noise.
     real_bin_override = _env(tool_name, "REAL_BIN")
     if real_bin_override:
         real_bin = real_bin_override
-        # Soft warning when an override's basename doesn't match the tool
-        # name — catches obvious substitution attempts like
-        # AZ_TG_REAL_BIN=/usr/bin/bash. Doesn't block (legitimate use:
-        # snap installs put az at /snap/bin/az, basename still 'az').
-        # P2 finding from security audit: log so the substitution is
-        # visible to anyone reviewing the audit log.
+        # Soft warning on obvious substitution (e.g. AZ_TG_REAL_BIN=
+        # /usr/bin/bash). Doesn't block — legitimate use is non-default
+        # install paths like /snap/bin/az (basename still 'az').
         override_base = os.path.basename(real_bin_override).split(".")[0]
         if override_base != tool_name:
             print(

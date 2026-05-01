@@ -1,21 +1,15 @@
 #!/usr/bin/env python3
 """gh tool-guard — thin stub that delegates to the shared tool_guard engine.
 
-All policy enforcement lives in scripts/tool-guard/tool_guard.py.
-See scripts/tool-guard/gh/POLICY.md for gh-specific policy notes
-(in particular the PR-body autoclose-keyword warnings).
+See gh/POLICY.md for gh-specific notes (PR-body autoclose-keyword warnings).
 """
-# TOOL_GUARD_STUB_v1 — canonical magic line. See az/wrapper.py header.
+# TOOL_GUARD_STUB_v1 — canonical magic line.
 import os
 import sys
 
 TOOL = "gh"
 REAL = os.environ.get("GH_TG_REAL_BIN", "/usr/bin/gh")  # TG_REAL_BIN_DEFAULT
 
-# Recursion shortcut removed (security review P1). See az/wrapper.py.
-
-# Test mode requires BOTH env hint AND sentinel file (sudo-required).
-# See az/wrapper.py for the rationale (quinn round-2 P1 finding).
 _test_mode = (os.environ.get("TG_TEST_MODE") == "1"
               and os.path.isfile("/etc/tool-guard/test-mode-enabled"))
 _engine_dirs = ([os.environ["TOOL_GUARD_ENGINE_DIR"]]
@@ -32,15 +26,11 @@ try:
 except ImportError as e:
     sys.stderr.write(
         f"{TOOL}-tool-guard: ❌ tool_guard engine not found ({e}).\n"
-        "  Expected at /usr/local/lib/tool-guard/tool_guard.py (installed)\n"
-        "  or alongside this file (dev/test).\n"
         "  Run scripts/tool-guard/install.sh to (re)install.\n"
-        f"  To bypass the guard for this call only: {REAL} <args>\n"
+        f"  Bypass for one call: {REAL} <args>\n"
     )
     sys.exit(127)
 
-# gh secret flags: --token (gh auth login --token), -p (no — gh uses
-# different short flags), and any others that ship a credential value.
 sys.exit(run(
     tool_name=TOOL,
     real_bin=REAL,

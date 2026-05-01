@@ -7,14 +7,10 @@
 > **Generic policy enforcement for CLI tools — built for AI agents
 > like Claude Code.** Drop-in tool guards for `az`, `git`, `gh`,
 > `sleep`, … with allow / warn / deny rules, custom messages,
-> structured audit logs, an interactive prompt for unknown commands,
-> and a shared engine that's <600 lines of pure-stdlib Python.
+> JSONL audit logs, secret-flag redaction, and an interactive prompt
+> for unknown commands. ~600 lines of pure-stdlib Python; ~500 tests.
 
-The package short-name is `tool-guard` (the engine module, the
-management CLI `tg`, the install path `/usr/local/lib/tool-guard/`).
-The full project name is **Claude Code Tool Guard** — designed
-explicitly to give AI agents a guardrail for destructive shell
-commands while staying out of the way for benign reads.
+`tool-guard` is the package; `tg` is the management CLI.
 
 ---
 
@@ -53,11 +49,10 @@ You can:
              └─ prompt → ask user [a/A/d/D] (TTY); auto-deny (non-TTY)
 ```
 
-The engine handles config loading, classification, prompt with
-auto-save to local config, redaction of secret-flag values, JSONL
-audit logging, recursion defence, force override, and dry-run mode.
-**Each per-tool tool guard is ~25 lines** — just declares the tool name,
-real binary path, and any secret flags to redact.
+The engine handles config loading, classification, secret-flag
+redaction, JSONL audit logging, the interactive prompt with auto-save
+to local config, and dry-run mode. **Each per-tool guard is ~25 lines**
+— just declares the tool name, real binary path, and secret flags.
 
 ## Quickstart
 
@@ -66,11 +61,9 @@ real binary path, and any secret flags to redact.
 git clone https://github.com/<your-org>/tool-guard.git
 cd tool-guard
 
-# 2. Run the test suite to verify (167+ tests, ~2s)
-bash _tests/tool_guard.test.sh
-bash _tests/az.smoke.test.sh
-bash _tests/git.smoke.test.sh
-bash _tests/sleep.test.sh
+# 2. Run the test suite to verify (~500 tests, ~5s)
+sudo mkdir -p /etc/tool-guard && sudo touch /etc/tool-guard/test-mode-enabled  # one-time
+for t in _tests/*.test.sh; do bash "$t" || break; done
 # (or with the management CLI: `tg test`)
 
 # 3. Set up a starter policy in your project
@@ -228,18 +221,22 @@ get an automatic deny instead of hanging.
 
 ## Environment variables
 
-For each wrapped tool (prefix = `<TOOL>_WRAPPER_`, e.g. `AZ_WRAPPER_`):
+Per-tool env vars (prefix `<TOOL>_TG_`):
 
 | Variable                            | Purpose |
 |-------------------------------------|---------|
-| `<TOOL>_TG_REAL_BIN`           | Override the real binary path (e.g. for snap installs) |
+| `<TOOL>_TG_REAL_BIN`           | Override the real binary path (e.g. snap installs) |
 | `<TOOL>_TG_DRYRUN=1`           | Print classification + exit; do not exec |
 | `<TOOL>_TG_DISABLE=1`          | Disable logging (the call still runs) |
 | `<TOOL>_TG_NONINTERACTIVE=1`   | Treat stdin as non-TTY (auto-deny on prompt) |
-| `<TOOL>_TG_FAKE_CLAUDE=0\|1`   | Force `claude_only` rules off (`0`) or on (`1`) — for tests |
 | `<TOOL>_TG_CONFIG=/path/...`   | Single-file config override (replaces all layers) |
-| `<TOOL>_TG_LOG_DIR=/path/...`  | Override log dir (default `/tmp/tool-guard`; one file per tool/day, `<tool>_YYYYMMDD.log`) |
-| `_<TOOL>_TG_ACTIVE=1`          | Internal recursion sentinel (do not set manually) |
+| `<TOOL>_TG_LOG_DIR=/path/...`  | Log dir (default `/tmp/tool-guard`, file per tool/day) |
+| `<TOOL>_TG_FAKE_CLAUDE=0\|1`   | Test only — gated by `/etc/tool-guard/test-mode-enabled` |
+
+Test-mode env vars (`TOOL_GUARD_DIR`, `TOOL_GUARD_ENGINE_DIR`,
+`<TOOL>_TG_FAKE_CLAUDE`) require both `TG_TEST_MODE=1` AND the
+sentinel file at `/etc/tool-guard/test-mode-enabled` (sudo to create).
+See [SECURITY.md](SECURITY.md).
 
 ## How install.sh works
 
@@ -303,34 +300,24 @@ the wrapper via PATH and produces no audit-log entry. To allow the
 command going forward, edit
 `.tool-guard/<tool>.config.json`.
 
-### What about `gh` (GitHub CLI)?
-
-Not a built-in tool guard yet, but the engine handles it the same way —
-write a 25-line stub plus a config (see [CONTRIBUTING.md](CONTRIBUTING.md)).
-PRs welcome.
-
 ### What languages does this work for?
 
-Any CLI that's invoked via `PATH` (so any compiled binary or shell
-script). The tool guard logic itself is Python 3.9+ stdlib.
+Any CLI invoked via `PATH` (any binary or shell script). The engine
+itself is Python 3.9+ stdlib only.
 
 ## Project status
 
-- 0.1.0 (initial public release)
-- 167 tests, all green
-- Used in production at one company; battle-tested for a couple of
-  weeks at the time of release
-- Pre-1.0 — public API is the `run()` signature in `tool_guard.py`,
-  treat with caution; minor versions may include breaking changes
-  until 1.0
-
-See [CHANGELOG.md](CHANGELOG.md) for history.
+- v0.1.0 (initial public release)
+- ~500 tests, 7 suites, all green on Python 3.9–3.12
+- Pre-1.0 — public API is `run()` in `tool_guard.py`; minor versions
+  may break until 1.0. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Per-tool guard details
 
-- [az](az/POLICY.md) — Azure CLI, design notes
-- [git](git/POLICY.md) — git tool guard, design notes
-- [sleep](sleep/POLICY.md) — sleep tool guard, design notes
+- [az](az/POLICY.md) — Azure CLI
+- [gh](gh/POLICY.md) — GitHub CLI (PR-body autoclose-keyword warns)
+- [git](git/POLICY.md) — git
+- [sleep](sleep/POLICY.md) — sleep (numeric guard, blocks long sleeps under Claude)
 
 ## Contributing
 

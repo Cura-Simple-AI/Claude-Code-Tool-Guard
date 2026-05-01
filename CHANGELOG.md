@@ -2,190 +2,124 @@
 
 All notable changes to **tool-guard** are documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-## [Unreleased]
-
-### Changed (BREAKING — pre-1.0)
-- Log path layout: `/tmp/tool-guard-logs/<tool>/calls-YYYY-MM.jsonl`
-  (per-tool subdir, monthly, .jsonl) → `/tmp/tool-guard/<tool>_YYYYMMDD.log`
-  (flat dir, daily, .log). Daily rotation keeps file sizes manageable
-  for shell inspection (`grep`, `jq`); flat layout lets a single
-  `ls /tmp/tool-guard/` show all tools.
-  - Migration: existing logs in `/tmp/tool-guard-logs/` are abandoned
-    (ephemeral by design). If you set `<TOOL>_TG_LOG_DIR` to a
-    persistent path, your override stays — only the filename inside
-    that dir changes.
-
-### Added
-- `tg list` / `status` / `check` now work in installed mode too —
-  previously they only listed source-tree wrappers. `tg check` falls
-  back to `~/.local/share/tool-guard-source/` (or
-  `$TOOL_GUARD_CACHE_DIR`) when running from `/usr/local/bin/tg`.
-- `TOOL_GUARD_ENGINE_DIR` env var on each wrapper — single-dir engine
-  override, useful for hermetic tests that need to verify behaviour
-  when the engine is missing.
-- `TG_INSTALL_DIR` / `TG_ENGINE_DIR` / `TG_LOG_DIR` env overrides on
-  the `tg` CLI for testing against non-default install layouts.
-- New test suite `_tests/tg.test.sh` (25 tests) — covers list/status/
-  check/log/version/config validate in both source and installed modes.
-- Engine logging tests: filename-pattern check, every-decision-recorded
-  (allow/warn/deny/auto-deny), append (not overwrite), exit-code +
-  duration_ms capture, mkdir -p of missing log dirs, ts/parent_cmd
-  schema integrity.
-
-### Fixed
-- `tg log -n 0` and `tg log -n -N` showed *all* entries due to
-  Python's `lst[-0:]` returning the whole list. Now `-n 0` returns
-  empty (exit 0, useful for "is there a log at all?" scripts) and
-  negative N rejects with exit 2.
-- MCP servers and other out-of-repo invocations (where the calling
-  process's cwd has no `.tool-guard/` ancestor — e.g. an Azure DevOps
-  MCP server running `az` with `cwd=/usr/bin/`) silently fell through
-  to the embedded deny-all default. Engine now also checks
-  `~/.config/tool-guard/` and `~/.tool-guard/` as fallbacks. Added
-  `TOOL_GUARD_DIR` env var as an explicit override (used by tests
-  and for non-standard layouts). Verified end-to-end: `mcp__azure-devops__core_list_projects`
-  now succeeds via the home-config symlink and the call appears in
-  the log with `decision=allow`, rule=`account get-access-token*`.
-
-### Changed (BREAKING — pre-1.0, original)
-- Renamed package from "wrapper(s)" to "tool-guard(s)" everywhere:
-  - Directory: `scripts/wrappers/` → `scripts/tool-guard/`
-  - Config dir: `.wrappers/` → `.tool-guard/`
-  - Config files: `<tool>-wrapper.config.json` → `<tool>.config.json`
-  - Env vars: `<TOOL>_WRAPPER_*` → `<TOOL>_TG_*` (e.g.
-    `AZ_WRAPPER_REAL_BIN` → `AZ_TG_REAL_BIN`,
-    `_AZ_WRAPPER_ACTIVE` → `_AZ_TG_ACTIVE`)
-  - Log dir: `/tmp/wrapper-logs/<tool>/` → `/tmp/tool-guard-logs/<tool>/`
-  - Code identifiers: `_find_wrappers_dir` → `_find_guards_dir`, etc.
-  Migration: rename your `.wrappers/` directory to `.tool-guard/`,
-  drop the `-wrapper` suffix from config filenames, and rename any
-  `<TOOL>_WRAPPER_*` env vars in your shell profile to `<TOOL>_TG_*`.
-  The internal stub filename `wrapper.py` and the installed engine
-  path `/usr/local/lib/tool-guard/` are unchanged.
-
-### Added
-- `tg` management CLI (installs to `/usr/local/bin/tg`) with commands:
-  `list`, `status`, `check`, `log`, `config show/init/edit/validate`,
-  `add`, `install/uninstall`, `test`, `version`, `help`.
-- Both per-tool stubs (`az`, `git`) fail-fast with exit 127 + clear
-  remedy message if the engine module can't be imported (previously
-  produced an uncaught Python traceback).
-- [TODO.md](TODO.md) listing the planned `gh` tool-guard POC and
-  other backlog items.
-
-### Added — `gh` tool-guard (Phase A complete)
-- `gh/wrapper.py` (engine delegate, ~30-line stub).
-- `examples/.tool-guard/gh.config.json` policy:
-  - `defaultMode: "allow"` (gh is mostly safe reads + benign mutations).
-  - **Always-deny** on credential / resource destruction: `auth
-    logout`, `repo delete`, `secret delete`, `variable delete`,
-    `ssh-key delete`, `gpg-key delete`, `release delete`.
-  - **Claude-only warn** on sensitive mutations: `pr merge`, `pr close`,
-    `issue close`, `release create`.
-  - **PR-body autoclose check** — warns when `gh pr create --body`
-    contains `[Ff]ix(es) #N` / `[Cc]lose(s) #N` / `[Rr]esolve(s) #N`.
-    GitHub auto-closes the linked issue at merge time, regardless of
-    whether the issue's DoD is met. The warning suggests `Part of #N`
-    or `Addresses #N` instead. Six character-class patterns cover the
-    capitalized + lowercase variants; all-caps `FIXES #` would slip
-    through (see TODO for `case_insensitive: true` engine flag).
-- `gh/POLICY.md` with rationale per rule + override + per-user override
-  recipes.
-- `_tests/gh.smoke.test.sh` — 46 tests covering all categories +
-  fail-fast missing-engine handling. Mirrors `az.smoke.test.sh` and
-  `git.smoke.test.sh` structure.
-
-### Fixed
-- Engine: `_env_prefix(tool_name)` now validates tool_name against
-  `^[a-zA-Z][a-zA-Z0-9-]*$`. Invalid names (containing dots, slashes,
-  leading digits, etc.) raise `ValueError` early — previously they
-  produced invalid POSIX env var names like `FOO.BAR_TG_ACTIVE` that
-  didn't propagate through sub-shells, causing recursion-sentinel
-  failures.
-- Engine: `claude_only` field now requires a JSON `boolean`. String
-  values like `"false"` were silently truthy in Python and would
-  unexpectedly gate the rule. Strings now print a warning and the
-  rule is treated as if `claude_only` were not set.
-- `tg config init / edit` were creating `<tool>-wrapper.config.json`
-  (pre-rename filename) instead of `<tool>.config.json`. Engine never
-  found those files at runtime.
-- `tg add <name>` now rejects reserved names (`examples`, `_tests`,
-  `tg`, `install`, `lib`, etc.) and names with leading/trailing
-  dashes — previously could create wrappers that collided with the
-  package layout.
-- `tg list` and `tg status` now correctly identify `/usr/local/bin/<name>`
-  as ours only if the file's first 2 KB contain a Python shebang +
-  `tool_guard`/`WRAPPER_ACTIVE` reference. Previously any executable
-  with the matching name was reported as installed.
-- `az`, `git` (and now `gh`) stubs fail-fast with exit 127 + clear
-  remedy message if `tool_guard` engine can't be imported (was an
-  uncaught `ModuleNotFoundError` traceback).
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
+this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Pre-1.0 minor versions may include breaking changes.
 
 ## [0.1.0] — 2026-05-01
 
-### Added
-- Generic policy-enforcement engine (`tool_guard.py`) shared by all wrappers.
-- Per-tool stub pattern (~25 lines per tool-guard): declares `tool_name`,
-  `real_bin`, and `secret_flags`, delegates to the engine for everything
-  else (config loading, classification, prompt, redaction, logging,
-  recursion defence, force override, dry-run).
-- Three severity tiers: `deny` (block + exit 13), `warn` (advisory +
-  proceed), `allow` (silent + proceed). Plus `prompt` defaultMode for
-  interactive TTY confirmation with auto-save to local config; non-TTY
-  callers auto-deny.
-- Layered config files: `<tool>.config.json` (shared, committed) +
+Initial public release.
+
+### Engine (`tool_guard.py`)
+
+- Pure-stdlib Python 3.9+ policy enforcement engine, ~600 lines.
+- Three severity tiers (`deny` / `warn` / `allow`) plus `prompt`
+  defaultMode for interactive TTY confirmation; non-TTY callers
+  auto-deny.
+- Layered config: `<tool>.config.json` (shared, committed),
   `<tool>.config.local.json` (per-user, gitignored, populated by
-  prompt's "save" actions) + `_defaults.json` (cross-cutting rules
-  applied to every tool).
-- Per-rule metadata: `pattern` (fnmatch glob), optional `message` (custom
-  text on deny/warn), optional `claude_only: true` (rule fires only under
-  a Claude Code ancestor process).
-- JSONL audit log per call to `/tmp/tool-guard-logs/<tool>/calls-YYYY-MM.jsonl`
-  with redaction of secret-flag values (`--password`, `--token`, etc.).
-- Recursion defence via env-var sentinel (`_<TOOL>_TG_ACTIVE`).
-- Three built-in tool-guard:
-  - **az** — Azure CLI, `defaultMode: prompt`, default-deny + interactive
-    confirm, custom messages on high-blast-radius rules (group delete,
-    keyvault secret purge, ad sp delete, etc.).
-  - **git** — `defaultMode: allow` with always-deny on push to main/master
-    (covers all flag combinations + branch-name false-positive avoidance)
-    and claude-only warns on force-push, --no-verify, reset --hard,
-    checkout --, blind merge strategies, rebase -i.
-  - **sleep** — numeric guard (not pattern-matched). Blocks `sleep > 30s`
-    under a Claude ancestor; correctly sums multi-arg invocations
-    (`sleep 1m 30s`) and degrades gracefully on invalid env vars or
-    missing real binary.
-- Orchestrator scripts: `install.sh` (installs engine to
-  `/usr/local/lib/tool-guard/` + each per-tool stub to
-  `/usr/local/bin/<name>`), `uninstall.sh` (symmetric).
-- Test suite: 167 passing tests across engine + per-tool smoke tests.
-  Engine tests use a synthesized "testtool" stub + fake binary so the
-  suite runs anywhere without external deps.
+  prompt's "save" action), `_defaults.json` (cross-cutting).
+- `fnmatch` glob patterns by default; opt into `re.search` via
+  `"type": "regex"`. `tg config validate` warns about deny regex
+  rules without a `^` anchor.
+- Per-rule metadata: `pattern`, optional `message`, optional
+  `claude_only: true` (rule active only under a Claude Code
+  ancestor process — Linux-only `/proc` walk).
+- JSONL audit log per call to `/tmp/tool-guard/<tool>_YYYYMMDD.log`
+  (one file per tool per day) with case-insensitive redaction of
+  secret-flag values.
+- Config files load with UTF-8 BOM stripping (Windows editors).
+- `defaultMode` accepts case + whitespace variations ("DENY",
+  " deny ", "deny\n" all map to "deny").
+- 4-level config-dir discovery: `$TOOL_GUARD_DIR` (test-mode-gated),
+  cwd walk-up, `~/.config/tool-guard/`, `~/.tool-guard/`. Home
+  fallbacks let MCP servers (running with `cwd=/usr/bin/`) find a
+  policy.
 
-### Notable bug-fix history (during development)
-- Engine: validate JSON config is a dict at top level (rejects strings,
-  arrays, numbers).
-- Engine: validate rule list is an array (rejects accidental string
-  forms like `"allow": "foo*"`).
-- Engine: validate rule pattern is a string (rejects `{"pattern": 42}`
-  and `{"pattern": null}`).
-- Engine: validate `defaultMode` against `{deny, allow, warn, prompt}` —
-  unknown values previously silently auto-allowed.
-- Engine: clear deny / warn message when `defaultMode` matches with no
-  rule (was showing confusing `<unknown>`).
-- Engine: warn when `<TOOL>_TG_CONFIG` points to a missing file.
-- Engine: detect non-executable / directory `real_bin` early with clear
-  error (was producing uncaught traceback).
-- Sleep: sum all duration args (was checking only `args[0]`, letting
-  `sleep 5 999` through).
-- Sleep: defensive parsing of `SLEEP_TG_MAX` (was crashing on typo).
-- Git: tighten `push origin main*` patterns to avoid false positives on
-  `push origin main:hotfix-branch` and `push origin main-feature` while
-  also catching previously-missed cases like `push -u origin main` and
-  `push origin main --force`.
+### Built-in tool guards
 
-[Unreleased]: ../../compare/v0.1.0...HEAD
+- **az** — Azure CLI. `defaultMode: prompt`, default-deny + interactive
+  confirm. Custom messages on high-blast-radius rules (group delete,
+  keyvault secret purge, ad sp delete). Auth-token allow rule for MCP
+  integration.
+- **gh** — GitHub CLI. `defaultMode: allow` for safe reads.
+  Always-deny on credential / resource destruction (auth logout,
+  repo delete, secret/variable/ssh-key/gpg-key/release delete).
+  Claude-only warns on sensitive mutations (pr merge/close, issue
+  close, release create). Warns when PR-body contains autoclose
+  keywords (Fix(es) / Close(s) / Resolve(s) #N).
+- **git** — `defaultMode: allow` with always-deny on push to
+  main/master (covers all flag combinations + branch-name
+  false-positive avoidance) and Claude-only warns on force-push,
+  --no-verify, reset --hard, checkout --, blind merge strategies,
+  rebase -i.
+- **sleep** — numeric guard (not engine-based). Blocks `sleep > 30s`
+  under a Claude ancestor; correctly sums multi-arg invocations
+  (`sleep 1m 30s`). `SLEEP_TG_MAX` env override hard-capped at 300s.
+
+### Management CLI (`tg`)
+
+- `tg list` / `status` / `check` / `log` / `version` / `help`
+- `tg install` / `uninstall` — pre-flight `which -a` discovery,
+  REAL_BIN baking into stubs, conflict detection (refuses to
+  overwrite a real binary at `/usr/local/bin/<name>` — suggests
+  `mv to <name>-real` workaround).
+- `tg config show / init / edit / validate` — `init` and `edit`
+  anchor at cwd (walk-up only, no home fallback) so files land
+  where the operator is.
+- `tg add <name>` — scaffold a new tool guard from canonical templates.
+- `tg test` — run the full test suite.
+
+### Install / orchestration
+
+- `install.sh` — installs engine to `/usr/local/lib/tool-guard/`,
+  per-tool stubs and the `tg` CLI to `/usr/local/bin/`. Honors
+  `TG_INSTALL_DIR` / `TG_ENGINE_DIR` env overrides; auto-skips
+  `sudo` when the target is writable.
+- Pre-install PATH check (verifies `/usr/local/bin` precedes
+  `/usr/bin`) — fails BEFORE writing stubs to avoid half-installed
+  state.
+- `uninstall.sh` — symmetric; refuses to remove non-tool-guard
+  binaries.
+- Bootstrap script (`tool-guard-install.sh` in the consumer repo) —
+  clones from GitHub + execs `tg install`. Supports
+  `TOOL_GUARD_REF` for tag/branch/SHA pinning and
+  `TOOL_GUARD_EXPECTED_SHA` for working-tree integrity verification.
+
+### Security
+
+- **Test-mode env vars are file-gated.** `TOOL_GUARD_DIR`,
+  `TOOL_GUARD_ENGINE_DIR`, and `<TOOL>_TG_FAKE_CLAUDE` are honored
+  only when `TG_TEST_MODE=1` is set AND
+  `/etc/tool-guard/test-mode-enabled` exists (sudo to create). An
+  AI agent can set env vars but cannot create the file in passing.
+- **`publish.sh` guards.** Refuses to publish from non-`main`
+  branches (`TG_PUBLISH_BRANCHES` to allow others), refuses on a
+  dirty working tree (catches untracked + modified), rejects empty
+  subtree splits. `TG_PUBLISH_FORCE=1` requires
+  `/etc/tool-guard/publish-force-allowed` for the same reason as
+  test mode.
+- **Canonical stub markers** (`# TOOL_GUARD_STUB_v1`,
+  `# TG_REAL_BIN_DEFAULT`) for deterministic detection across
+  `tg`'s `_is_our_wrapper` / `_guard_installed` and the install
+  scripts. Drift-detection tests in `_tests/tg.test.sh`.
+- **Secret-flag redaction** is case-insensitive (`--Password=secret`
+  no longer leaks).
+- **REAL_BIN substitution attempts** (e.g. `AZ_TG_REAL_BIN=/usr/bin/bash`)
+  are recorded in the audit log + warned to stderr when the override's
+  basename doesn't match the tool name.
+- **`derive_pattern("*")` requires explicit `YES` confirmation** in
+  the interactive prompt before persisting an allow-everything rule.
+
+### Tests
+
+- ~500 tests across 7 suites (`tool_guard.test.sh`, `tg.test.sh`,
+  `install.test.sh`, `az.smoke.test.sh`, `gh.smoke.test.sh`,
+  `git.smoke.test.sh`, `sleep.test.sh`).
+- All suites green on Python 3.9 / 3.10 / 3.11 / 3.12.
+- CI workflow at `.github/workflows/test.yml` runs every suite
+  on every push + PR.
+- Engine→tg log round-trip integration test asserts schema stability
+  between writer and reader.
+
 [0.1.0]: ../../releases/tag/v0.1.0

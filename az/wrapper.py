@@ -1,39 +1,20 @@
 #!/usr/bin/env python3
 """az tool-guard — thin stub that delegates to the shared tool_guard engine.
 
-All policy enforcement (config loading, classification, prompt, log,
-redact, dry-run) lives in scripts/tool-guard/tool_guard.py. This file
-just declares the per-tool constants (tool name, real binary path,
-secret-bearing flags) and calls into the engine.
-
-See scripts/tool-guard/README.md for the system architecture and
-scripts/tool-guard/az/POLICY.md for az-specific policy notes.
+Per-tool constants only (tool name, real binary path, secret-bearing
+flags). All policy enforcement lives in tool_guard.py.
 """
-# TOOL_GUARD_STUB_v1 — canonical magic line. Detection helpers (tg's
-# _is_our_wrapper, _guard_installed, install.sh's overwrite check)
-# look for this exact comment to identify our stubs. Do NOT remove or
-# change without updating those callers in lockstep.
+# TOOL_GUARD_STUB_v1 — canonical magic line. Detection helpers
+# (_is_our_wrapper / _guard_installed in tg, install.sh's overwrite
+# check) match on this exact comment.
 import os
 import sys
 
 TOOL = "az"
 REAL = os.environ.get("AZ_TG_REAL_BIN", "/usr/bin/az")  # TG_REAL_BIN_DEFAULT
 
-# NOTE: previously used env-var sentinel _AZ_TG_ACTIVE for a
-# recursion shortcut. Removed (security review P1 finding): env vars
-# are inheritable + user-poisonable, so trusting any sentinel value
-# created a bypass vector. Engine always runs policy now; recursion
-# cost is ~1ms (well below noise) and most CLIs don't self-invoke.
-
-# Locate engine. TOOL_GUARD_ENGINE_DIR is honored ONLY when test mode
-# is active. Test mode requires BOTH:
-#   1. TG_TEST_MODE=1 env var (a hint Claude can set), AND
-#   2. The sentinel file /etc/tool-guard/test-mode-enabled (requires
-#      sudo to create — Claude can't add this in passing).
-# Quinn round-2 finding: env-var-only gate is bypassable by any
-# process that can set env. The file gate raises the bar to "process
-# already had sudo at some prior point" — which in real deployments
-# is a sysadmin opt-in, not something Claude does in passing.
+# TOOL_GUARD_ENGINE_DIR honored only in test mode (TG_TEST_MODE=1 +
+# /etc/tool-guard/test-mode-enabled file). See SECURITY.md.
 _test_mode = (os.environ.get("TG_TEST_MODE") == "1"
               and os.path.isfile("/etc/tool-guard/test-mode-enabled"))
 _engine_dirs = ([os.environ["TOOL_GUARD_ENGINE_DIR"]]
@@ -49,15 +30,12 @@ try:
     from tool_guard import run  # noqa: E402
 except ImportError as e:
     # Fail-fast on missing engine. Falling through to the real binary
-    # would silently disable policy enforcement — exactly the wrong
-    # behaviour for a guard. Exit 127 (same as "binary not found")
-    # with a clear remedy.
+    # would silently disable policy enforcement.
     sys.stderr.write(
         f"{TOOL}-tool-guard: ❌ tool_guard engine not found ({e}).\n"
-        "  Expected at /usr/local/lib/tool-guard/tool_guard.py (installed)\n"
-        "  or alongside this file (dev/test).\n"
+        "  Expected at /usr/local/lib/tool-guard/tool_guard.py.\n"
         "  Run scripts/tool-guard/install.sh to (re)install.\n"
-        f"  To bypass the guard for this call only: {REAL} <args>\n"
+        f"  Bypass for one call: {REAL} <args>\n"
     )
     sys.exit(127)
 

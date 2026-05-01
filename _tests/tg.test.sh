@@ -340,6 +340,115 @@ assert_contains "auto-discover sees noexisttool" "noexisttool" "$out"
 
 rm -rf "$SANDBOX" "$TMP_INSTALL" "$TMP_ENGINE" "$FAKE_BIN_DIR"
 
+echo ""
+echo "── tg install — bug-hunt regressions ──"
+
+# Re-import tg as a Python module to test internal helpers directly.
+# Copy to a non-tg name so import works (importing a file named 'tg' is awkward).
+TG_PYMOD=$(mktemp -d)/tgmod.py
+cp "$TG" "$TG_PYMOD"
+
+# Bug H regression: _patch_real_bin must NOT raise on read-only stub
+RO_TMP=$(mktemp -d)
+RO_STUB="$RO_TMP/wrapper.py"
+cat > "$RO_STUB" <<'EOF'
+#!/usr/bin/env python3
+import os
+REAL = os.environ.get("FOO_TG_REAL_BIN", "/usr/bin/foo")
+EOF
+chmod 0444 "$RO_STUB"
+result=$(python3 -c "
+import sys; sys.path.insert(0, '$(dirname "$TG_PYMOD")')
+import tgmod, pathlib
+patched, msg = tgmod._patch_real_bin(pathlib.Path('$RO_STUB'), 'foo', '/opt/foo')
+print(f'patched={patched}|msg={msg}')
+" 2>&1)
+case "$result" in
+  patched=False*read-only*) pass "_patch_real_bin: read-only stub returns (False, msg) instead of raising" ;;
+  *) fail "_patch_real_bin on read-only stub" "got: $result" ;;
+esac
+chmod 0644 "$RO_STUB"
+rm -rf "$RO_TMP"
+
+# Bug J regression: _which_all skips relative PATH entries (would otherwise
+# bake a cwd-dependent path into the stub).
+WHICH_TMP=$(mktemp -d)
+ABSDIR="$WHICH_TMP/absbin"
+mkdir -p "$ABSDIR"
+cp /bin/echo "$ABSDIR/onlytool"
+# Also drop a relative-path candidate by setting PATH entry to "."
+# and putting onlytool in cwd
+RELDIR="$WHICH_TMP/reldir"
+mkdir -p "$RELDIR"
+cp /bin/echo "$RELDIR/onlytool"
+
+# Use python3 by absolute path so we can manipulate PATH freely without
+# breaking the interpreter lookup.
+PY3=$(command -v python3)
+TGMOD_DIR="$(dirname "$TG_PYMOD")"
+
+# Test 1: with PATH containing only an absolute dir → finds it
+result=$(cd "$RELDIR" && PATH="$ABSDIR" "$PY3" -c "
+import sys; sys.path.insert(0, '$TGMOD_DIR')
+import tgmod
+print(tgmod._which_all('onlytool'))
+" 2>&1)
+case "$result" in
+  *"$ABSDIR/onlytool"*) pass "_which_all finds absolute PATH entries" ;;
+  *) fail "_which_all absolute" "got: $result" ;;
+esac
+
+# Test 2: with PATH=. and cwd has onlytool → SKIPPED (relative)
+result=$(cd "$RELDIR" && PATH="." "$PY3" -c "
+import sys; sys.path.insert(0, '$TGMOD_DIR')
+import tgmod
+r = tgmod._which_all('onlytool')
+print('FOUND' if r else 'EMPTY', r)
+" 2>&1)
+case "$result" in
+  EMPTY*) pass "_which_all skips relative PATH entries (would bake cwd-dependent path)" ;;
+  *) fail "_which_all should skip relative entries" "got: $result" ;;
+esac
+
+# Test 3: empty entries in PATH (leading/trailing colon) → no crash
+result=$(PATH=":$ABSDIR:" "$PY3" -c "
+import sys; sys.path.insert(0, '$TGMOD_DIR')
+import tgmod
+print(tgmod._which_all('onlytool'))
+" 2>&1)
+case "$result" in
+  *"$ABSDIR/onlytool"*) pass "_which_all handles empty PATH entries gracefully" ;;
+  *) fail "_which_all empty PATH entries" "got: $result" ;;
+esac
+
+rm -rf "$WHICH_TMP"
+
+# Bug G follow-up: _discover_real_binary skips symlinks pointing at our wrapper
+DISC_TMP=$(mktemp -d)
+INST_DIR="$DISC_TMP/install"; PATHA="$DISC_TMP/patha"; PATHB="$DISC_TMP/pathb"
+mkdir -p "$INST_DIR" "$PATHA" "$PATHB"
+cat > "$INST_DIR/foo" <<'EOF'
+#!/usr/bin/env python3
+# tool_guard wrapper
+EOF
+chmod +x "$INST_DIR/foo"
+ln -s "$INST_DIR/foo" "$PATHA/foo"
+cp /bin/echo "$PATHB/foo"
+
+result=$(TG_INSTALL_DIR="$INST_DIR" PATH="$PATHA:$PATHB" "$PY3" -c "
+import sys; sys.path.insert(0, '$TGMOD_DIR')
+import tgmod, os, pathlib
+tgmod.INSTALL_DIR = pathlib.Path(os.environ['TG_INSTALL_DIR'])
+print(tgmod._discover_real_binary('foo'))
+" 2>&1)
+case "$result" in
+  *"$PATHB/foo") pass "_discover_real_binary skips symlinks pointing at our wrapper" ;;
+  *) fail "_discover_real_binary symlink-skip" "got: $result (expected $PATHB/foo)" ;;
+esac
+rm -rf "$DISC_TMP"
+
+rm -rf "$(dirname "$TG_PYMOD")"
+
 # ─── Result ──────────────────────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════════════════════"

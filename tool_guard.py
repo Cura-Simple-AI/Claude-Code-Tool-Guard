@@ -204,7 +204,10 @@ def _load_one(path: Path | None) -> dict | None:
     if not path or not path.exists():
         return None
     try:
-        with path.open("r", encoding="utf-8") as f:
+        # utf-8-sig silently strips a leading UTF-8 BOM (0xEF 0xBB 0xBF)
+        # if present — Windows editors sometimes save JSON with one,
+        # and stdlib json.load chokes on it with a cryptic error.
+        with path.open("r", encoding="utf-8-sig") as f:
             data = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         print(f"tool-guard: config load failed at {path}: {e} — ignoring this file.", file=sys.stderr)
@@ -467,6 +470,16 @@ def _log_file(tool_name: str) -> Path:
     lost on devcontainer rebuild. Override <TOOL>_TG_LOG_DIR to point
     at a persistent dir."""
     base = Path(_env(tool_name, "LOG_DIR") or "/tmp/tool-guard")
+    if base.exists() and not base.is_dir():
+        # mkdir with exist_ok=True still raises FileExistsError if the
+        # path is a non-directory — translate to an actionable message.
+        # write_event() catches OSError, so the wrapper still works
+        # (just without logging) — but the user needs to know to fix it.
+        raise OSError(
+            f"log path {base} exists but is a file, not a directory. "
+            f"Remove it (rm {base}) or set {tool_name.upper()}_TG_LOG_DIR "
+            f"to a different path."
+        )
     base.mkdir(parents=True, exist_ok=True)
     return base / f"{tool_name}_{time.strftime('%Y%m%d')}.log"
 

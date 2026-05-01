@@ -1227,6 +1227,52 @@ assert_eq "TOOL_GUARD_DIR=/nonexistent → None (no silent fallback)" "None" "$r
 rm -rf "$FAKE_HOME" "$FAKE_HOME2" "$EXPLICIT_DIR"
 
 echo ""
+echo "── 29a. _load_one() — config file with UTF-8 BOM ──"
+# Windows editors sometimes save JSON with a leading UTF-8 BOM
+# (0xEF 0xBB 0xBF). stdlib json.load chokes on it. _load_one() must
+# strip the BOM transparently (uses utf-8-sig encoding).
+TMP_BOM=$(mktemp -d)
+BOM_FILE="$TMP_BOM/cfg.json"
+printf '\xef\xbb\xbf{"defaultMode":"deny","allow":["foo*"]}' > "$BOM_FILE"
+result=$(TOOL_GUARD_ENGINE_DIR="$ENGINE_DIR" python3 -c "
+import sys; sys.path.insert(0, '$ENGINE_DIR')
+from tool_guard import _load_one
+import pathlib
+print(_load_one(pathlib.Path('$BOM_FILE')))
+" 2>&1)
+case "$result" in
+  *"defaultMode"*"deny"*) pass "_load_one strips UTF-8 BOM transparently" ;;
+  *) fail "_load_one BOM" "got: $result" ;;
+esac
+rm -rf "$TMP_BOM"
+
+echo ""
+echo "── 29b. _log_file() — log dir exists as a FILE → actionable error ──"
+# Regression: mkdir(parents=True, exist_ok=True) raises FileExistsError
+# with a cryptic "File exists" message when the path is a non-directory
+# file. Engine should detect this case and raise a clearer OSError.
+TMP_LOGFILE_AS_DIR=$(mktemp)  # creates a file, not a dir
+result=$(TOOL_GUARD_ENGINE_DIR="$ENGINE_DIR" python3 -c "
+import sys, os; sys.path.insert(0, '$ENGINE_DIR')
+os.environ['TESTTOOL_TG_LOG_DIR'] = '$TMP_LOGFILE_AS_DIR'
+from tool_guard import _log_file
+try:
+    _log_file('testtool')
+    print('NO_ERROR')
+except OSError as e:
+    print(f'OSError:{e}')
+" 2>&1)
+case "$result" in
+  *"exists but is a file"*"set TESTTOOL_TG_LOG_DIR"*)
+    pass "log-dir-as-file → actionable error message"
+    ;;
+  *)
+    fail "log-dir-as-file error" "got: $result"
+    ;;
+esac
+rm -f "$TMP_LOGFILE_AS_DIR"
+
+echo ""
 echo "── 30. End-to-end: config from ~/.config/tool-guard works for /usr/bin invocations ──"
 # Simulates the MCP scenario: az is invoked from a cwd that has no
 # .tool-guard/ ancestor. Without the home fallback this would deny;

@@ -578,15 +578,22 @@ INSTALL_HINTS = {
 
 
 def _which_all(name: str) -> list[str]:
-    """Return all PATH entries for `name` in order, like `which -a`. Empty
-    list if not found. We don't use shutil.which() because it returns only
-    the first match and we need to skip our own wrapper at INSTALL_DIR."""
+    """Return all PATH entries for `name` in order, like `which -a`.
+    Returns absolute paths only (relative PATH entries like `.` are
+    skipped — we'd otherwise bake a cwd-dependent path into the stub
+    via _patch_real_bin, which breaks the moment cwd changes). Skips
+    duplicates by resolved path. We don't use shutil.which() because
+    it returns only the first match and we need to skip our own
+    wrapper at INSTALL_DIR."""
     out = []
     seen = set()
     for d in os.environ.get("PATH", "").split(os.pathsep):
         if not d:
             continue
-        cand = Path(d) / name
+        d_path = Path(d)
+        if not d_path.is_absolute():
+            continue  # baking a relative path would break at runtime
+        cand = d_path / name
         try:
             if cand.is_file() and os.access(cand, os.X_OK):
                 rp = str(cand.resolve())
@@ -652,7 +659,10 @@ def _patch_real_bin(stub: Path, tool: str, real: str) -> tuple[bool, str]:
     replacement = f'os.environ.get("{upper}_TG_REAL_BIN", "{real}")'
     if needle not in text:
         return (False, f"could not find expected pattern in {stub} — proceeding without patch")
-    stub.write_text(text.replace(needle, replacement), encoding="utf-8")
+    try:
+        stub.write_text(text.replace(needle, replacement), encoding="utf-8")
+    except OSError as e:
+        return (False, f"could not write {stub} (read-only?): {e}")
     return (True, f"patched stub default: {default_path} → {real}")
 
 

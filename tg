@@ -1132,7 +1132,7 @@ def cmd_test(_args) -> int:
     if not tests_dir.is_dir():
         # Likely running from /usr/local/bin/ (installed mode), where
         # _tests/ doesn't ship. Point at the source clone if known.
-        if str(PKG_ROOT) == "/usr/local/bin":
+        if _is_installed_mode():
             cache_hint = os.path.expanduser("~/.local/share/tool-guard-source")
             print(
                 _yellow(

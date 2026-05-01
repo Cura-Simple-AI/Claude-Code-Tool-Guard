@@ -1015,14 +1015,27 @@ clear_configs
 write_config '{"defaultMode":"allow","allow":["*"]}'
 
 LOG_DIR=$(mktemp -d)
+# P2-F: capture date BEFORE the engine runs so a midnight crossover
+# during the test (engine writes _$DAY1, post-engine `date` returns
+# DAY2) doesn't produce a false negative. We accept either DAY1 or
+# DAY2 (since either is correct depending on which side of midnight
+# the engine landed).
+date_before=$(date +%Y%m%d)
 tt TESTTOOL_TG_LOG_DIR="$LOG_DIR" -- version >/dev/null 2>&1
+date_after=$(date +%Y%m%d)
 LOG_FILE=$(ls "$LOG_DIR"/*.log 2>/dev/null | head -1)
-expected_name="testtool_$(date +%Y%m%d).log"
 actual_name=$(basename "$LOG_FILE" 2>/dev/null)
-if [[ "$actual_name" == "$expected_name" ]]; then
-  pass "log filename matches <tool>_YYYYMMDD.log pattern"
+if [[ "$actual_name" == "testtool_${date_before}.log" \
+   || "$actual_name" == "testtool_${date_after}.log" ]]; then
+  pass "log filename matches <tool>_YYYYMMDD.log pattern (midnight-crossing safe)"
 else
-  fail "log filename pattern" "expected '$expected_name', got '$actual_name'"
+  fail "log filename pattern" "got '$actual_name', expected testtool_${date_before}.log or testtool_${date_after}.log"
+fi
+# Generic shape check too — must match \w+_\d{8}\.log regardless of date
+if [[ "$actual_name" =~ ^testtool_[0-9]{8}\.log$ ]]; then
+  pass "log filename has shape \w+_\d{8}\.log"
+else
+  fail "log filename shape" "got '$actual_name'"
 fi
 
 # Default log dir (no TESTTOOL_TG_LOG_DIR override) is /tmp/tool-guard/.

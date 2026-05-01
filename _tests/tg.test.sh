@@ -877,6 +877,61 @@ ec=$?
 assert_eq "glob deny rules not subject to anchor warning" "0" "$ec"
 rm -rf "$ANCHOR_TMP"
 
+# ─── tg test command coverage (Scott P2-C) ──────────────────────────
+echo ""
+echo "── tg test command ──"
+
+# Build a sandbox PKG_ROOT with a minimal _tests/ dir
+TEST_SANDBOX=$(mktemp -d)
+cp "$TG" "$TEST_SANDBOX/tg"; chmod +x "$TEST_SANDBOX/tg"
+mkdir -p "$TEST_SANDBOX/_tests"
+
+# Test 1: all-pass exit 0
+cat > "$TEST_SANDBOX/_tests/passing.test.sh" <<'EOF'
+#!/bin/bash
+exit 0
+EOF
+chmod +x "$TEST_SANDBOX/_tests/passing.test.sh"
+out=$("$TEST_SANDBOX/tg" test 2>&1)
+ec=$?
+assert_eq "tg test all-pass → exit 0" "0" "$ec"
+assert_contains "tg test reports 'All N suites passed'" "All 1 suites passed" "$out"
+
+# Test 2: with failure → exit 1, reports failed count
+cat > "$TEST_SANDBOX/_tests/failing.test.sh" <<'EOF'
+#!/bin/bash
+exit 7
+EOF
+chmod +x "$TEST_SANDBOX/_tests/failing.test.sh"
+out=$("$TEST_SANDBOX/tg" test 2>&1)
+ec=$?
+assert_eq "tg test with failure → exit 1" "1" "$ec"
+assert_contains "tg test reports failed count" "1/2 suite(s) failed" "$out"
+
+# Test 3: no _tests dir → graceful error, no traceback
+NO_TESTS_DIR=$(mktemp -d)
+cp "$TG" "$NO_TESTS_DIR/tg"; chmod +x "$NO_TESTS_DIR/tg"
+out=$("$NO_TESTS_DIR/tg" test 2>&1)
+ec=$?
+assert_eq "tg test no _tests dir → exit 1" "1" "$ec"
+if echo "$out" | grep -q "Traceback"; then
+  fail "tg test no _tests dir" "Python traceback"
+else
+  pass "tg test no _tests dir → no Python traceback"
+fi
+rm -rf "$NO_TESTS_DIR"
+
+# Test 4: installed mode (PKG_ROOT == INSTALL_DIR) → hint at source
+INSTALLED_TG_TMP=$(mktemp -d)
+cp "$TG" "$INSTALLED_TG_TMP/tg"; chmod +x "$INSTALLED_TG_TMP/tg"
+out=$(TG_INSTALL_DIR="$INSTALLED_TG_TMP" "$INSTALLED_TG_TMP/tg" test 2>&1)
+if echo "$out" | grep -qF "tool-guard-source" || echo "$out" | grep -qF "source clone"; then
+  pass "tg test installed-mode points at source cache"
+else
+  fail "tg test installed-mode hint" "$(echo "$out" | head -3)"
+fi
+rm -rf "$INSTALLED_TG_TMP" "$TEST_SANDBOX"
+
 # ─── Stub canonical-marker drift detection (Aksel P1) ───────────────
 echo ""
 echo "── stub template drift detection ──"

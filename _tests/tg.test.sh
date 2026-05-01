@@ -627,6 +627,110 @@ assert_eq "tg config show — no .tool-guard/ exits 1" "1" "$ec"
 assert_contains "config show — clear error" "no .tool-guard" "$out"
 rm -rf "$SHOW_CWD"
 
+# ─── tg status ───────────────────────────────────────────────────────
+echo ""
+echo "── tg status ──"
+
+# tg status with explicit tool name + a real .tool-guard/ in cwd
+STATUS_CWD=$(mktemp -d)
+mkdir -p "$STATUS_CWD/.tool-guard"
+cat > "$STATUS_CWD/.tool-guard/az.config.json" <<'EOF'
+{"defaultMode":"prompt","allow":["version"],"warn":[],"deny":[]}
+EOF
+out=$(cd "$STATUS_CWD" && "$TG" status az 2>&1)
+ec=$?
+assert_eq "tg status az — exit 0" "0" "$ec"
+assert_contains "tg status — shows config dir" "Config dir" "$out"
+assert_contains "tg status — shows az config marker" "shared cfg" "$out"
+assert_contains "tg status — shows shared cfg path" "az.config.json" "$out"
+
+# tg status (no tool arg) — lists all installed
+out=$(cd "$STATUS_CWD" && "$TG" status 2>&1)
+ec=$?
+assert_eq "tg status (no arg) — exit 0" "0" "$ec"
+# Should at least show one of the installed tool guards
+if echo "$out" | grep -qE "(az|gh|sleep)"; then
+  pass "tg status (no arg) lists installed tool-guards"
+else
+  fail "tg status no-arg" "no tools listed: $out"
+fi
+
+# tg status with no .tool-guard/ anywhere — should NOT crash, just say "not found"
+out=$(cd /tmp && TOOL_GUARD_DIR=/nonexistent HOME=/nonexistent "$TG" status az 2>&1)
+ec=$?
+# Returns 0 (status is informational, can't really fail) but reports clearly
+assert_contains "tg status — no .tool-guard reports clearly" "not found" "$out"
+rm -rf "$STATUS_CWD"
+
+# ─── tg help ─────────────────────────────────────────────────────────
+echo ""
+echo "── tg help ──"
+out=$("$TG" help 2>&1)
+ec=$?
+assert_eq "tg help — exit 0" "0" "$ec"
+assert_contains "tg help — lists commands section" "Commands" "$out"
+assert_contains "tg help — lists 'check' command" "check" "$out"
+assert_contains "tg help — lists 'log' command" "log" "$out"
+
+# tg help <command> — per-command help
+out=$("$TG" help check 2>&1)
+ec=$?
+assert_eq "tg help check — exit 0" "0" "$ec"
+assert_contains "tg help check — shows usage line for check" "check" "$out"
+
+# tg help unknownsubcommand — should fail gracefully
+out=$("$TG" help noexistsubcmd 2>&1)
+# Either prints help or errors, but must NOT traceback
+if echo "$out" | grep -q "Traceback"; then
+  fail "tg help unknown" "Python traceback"
+else
+  pass "tg help unknown — no traceback"
+fi
+
+# tg --help (argparse standard) also works
+out=$("$TG" --help 2>&1)
+ec=$?
+assert_eq "tg --help — exit 0" "0" "$ec"
+assert_contains "tg --help — argparse usage" "usage" "$out"
+
+# ─── tg config edit ──────────────────────────────────────────────────
+echo ""
+echo "── tg config edit ──"
+
+# Run config edit with EDITOR=true (no-op editor that just exits 0).
+# Verifies the file is created from template and EDITOR is invoked.
+EDIT_SANDBOX=$(mktemp -d)
+cp "$TG" "$EDIT_SANDBOX/tg"
+chmod +x "$EDIT_SANDBOX/tg"
+mkdir -p "$EDIT_SANDBOX/examples/.tool-guard"
+cat > "$EDIT_SANDBOX/examples/.tool-guard/widget.config.json" <<'EOF'
+{"defaultMode":"prompt","allow":["safe*"]}
+EOF
+EDIT_CWD=$(mktemp -d)
+
+# config edit (shared) — copies template + invokes EDITOR
+out=$(cd "$EDIT_CWD" && EDITOR=true "$EDIT_SANDBOX/tg" config edit widget 2>&1)
+ec=$?
+assert_eq "tg config edit widget — exit 0" "0" "$ec"
+[[ -f "$EDIT_CWD/.tool-guard/widget.config.json" ]] && pass "config edit — created shared config" || fail "no config file"
+
+# config edit --local — creates the .local.json file
+out=$(cd "$EDIT_CWD" && EDITOR=true "$EDIT_SANDBOX/tg" config edit widget --local 2>&1)
+ec=$?
+assert_eq "tg config edit --local — exit 0" "0" "$ec"
+[[ -f "$EDIT_CWD/.tool-guard/widget.config.local.json" ]] && pass "config edit --local — created .local.json" || fail "no local config"
+
+# Bug-prevention: edit anchors at cwd (walk-up only, not home fallback).
+# Even if HOME has a .tool-guard symlink, init lands at cwd.
+HOME_FALLBACK=$(mktemp -d)
+mkdir -p "$HOME_FALLBACK/.config/tool-guard"
+NEW_CWD=$(mktemp -d)
+out=$(cd "$NEW_CWD" && HOME="$HOME_FALLBACK" EDITOR=true "$EDIT_SANDBOX/tg" config edit widget 2>&1)
+[[ -f "$NEW_CWD/.tool-guard/widget.config.json" ]] && pass "config edit anchors at cwd, not ~/.config/" || fail "config edit went to home fallback"
+[[ -f "$HOME_FALLBACK/.config/tool-guard/widget.config.json" ]] && fail "config edit polluted home fallback" || pass "home fallback NOT touched by edit"
+
+rm -rf "$EDIT_SANDBOX" "$EDIT_CWD" "$HOME_FALLBACK" "$NEW_CWD"
+
 # ─── Result ──────────────────────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════════════════════"

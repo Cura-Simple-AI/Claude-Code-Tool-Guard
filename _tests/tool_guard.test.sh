@@ -873,6 +873,49 @@ write_config '{"defaultMode":42}'
 assert_stderr "non-string defaultMode → warning + fallback" "invalid defaultMode" \
   -- something
 
+# Bug T regression: defaultMode is normalized (case + whitespace).
+# "DENY", " deny ", "deny\n" should all silently map to "deny" — the
+# user clearly meant deny, no need for a warning.
+for raw_mode in 'DENY' 'Deny' ' deny ' 'deny\n'; do
+  clear_configs
+  # JSON-quote the raw_mode (\n must be a literal escape in JSON)
+  write_config "{\"defaultMode\":\"$raw_mode\"}"
+  out=$(tt TESTTOOL_TG_DRYRUN=1 -- whatever 2>&1) || true
+  if printf '%s' "$out" | grep -qF "classify=deny" \
+     && ! printf '%s' "$out" | grep -qF "invalid defaultMode"; then
+    pass "defaultMode '$raw_mode' normalized → deny (no warning)"
+  else
+    fail "defaultMode '$raw_mode' normalization" "got: $out"
+  fi
+done
+
+# Bug U regression: empty patterns in rules silently matched empty argv.
+# _normalize_rules now drops them with a warning.
+clear_configs
+write_config '{"defaultMode":"deny","allow":["","good*"," "]}'
+out=$(tt TESTTOOL_TG_DRYRUN=1 -- good now 2>&1) || true
+if printf '%s' "$out" | grep -qF "classify=allow" \
+   && printf '%s' "$out" | grep -qE "good.*\*"; then
+  pass "non-empty patterns still work after dropping empties"
+else
+  fail "non-empty pattern after empty drop" "got: $out"
+fi
+err=$(tt -- some thing 2>&1 >/dev/null) || true
+if printf '%s' "$err" | grep -qF "skipping empty pattern"; then
+  pass "empty patterns logged with warning"
+else
+  fail "empty pattern warning" "got: $err"
+fi
+# Critically, an empty argv should NOT be allowed via the empty pattern
+clear_configs
+write_config '{"defaultMode":"deny","allow":[""]}'
+ec=$(tt -- '' 2>/dev/null; echo $?)
+if [[ "$ec" == "13" ]]; then
+  pass "empty pattern doesn't match empty argv (was a security hole)"
+else
+  fail "empty pattern + empty argv" "exit was $ec, expected 13 (deny)"
+fi
+
 # defaultMode='warn' with no rule matched → clean message (not '<unknown>')
 clear_configs
 write_config '{"defaultMode":"warn"}'

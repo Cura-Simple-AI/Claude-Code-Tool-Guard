@@ -230,11 +230,17 @@ def _validate_default_mode(value) -> str:
     hole."""
     if value is None:
         return "deny"
-    if value in _VALID_DEFAULT_MODES:
-        return value
+    # Normalize: strip whitespace + lowercase. "DENY", " deny ", "deny\n"
+    # all mean "deny" — don't make users guess at exact casing/whitespace
+    # and silently fall back to deny when their config "looks fine".
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in _VALID_DEFAULT_MODES:
+            return normalized
     print(
         f"tool-guard: invalid defaultMode={value!r} — must be one of "
-        f"{sorted(_VALID_DEFAULT_MODES)}. Falling back to 'deny'.",
+        f"{sorted(_VALID_DEFAULT_MODES)} (case + whitespace insensitive). "
+        "Falling back to 'deny'.",
         file=sys.stderr,
     )
     return "deny"
@@ -259,9 +265,25 @@ def _normalize_rules(raw) -> list[dict]:
         return []
     out: list[dict] = []
     for r in raw:
+        # Reject empty / whitespace-only patterns — fnmatch("", "") returns
+        # True, so an empty pattern in an allow list silently matches an
+        # empty argv item (likely a bug in the config, not what was meant).
         if isinstance(r, str):
+            if not r.strip():
+                print(
+                    f"tool-guard: skipping empty pattern in rule list "
+                    "(likely a config typo).",
+                    file=sys.stderr,
+                )
+                continue
             out.append({"pattern": r})
         elif isinstance(r, dict) and isinstance(r.get("pattern"), str):
+            if not r["pattern"].strip():
+                print(
+                    f"tool-guard: skipping rule with empty pattern: {r!r}",
+                    file=sys.stderr,
+                )
+                continue
             # pattern must be a string — fnmatch crashes on int/None/other.
             # Also validate claude_only is a bool — strings like "true"/"false"
             # are both truthy in Python and would silently treat the rule as

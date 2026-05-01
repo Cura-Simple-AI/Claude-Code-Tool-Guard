@@ -47,6 +47,19 @@ echo "════════════════════════�
 echo " tg CLI tests"
 echo "════════════════════════════════════════════════════════════"
 
+# ─── tg shebang ──────────────────────────────────────────────────────
+# Regression: tool-guard-install.sh exec'd tg via `bash $CACHE/tg`,
+# which tried to interpret the Python source as bash and hung. Catch
+# any future drift to a non-Python shebang.
+echo ""
+echo "── tg shebang ──"
+shebang=$(head -1 "$TG")
+if [[ "$shebang" == "#!/usr/bin/env python3" ]] || [[ "$shebang" == "#!"*python* ]]; then
+  pass "tg has python shebang ($shebang)"
+else
+  fail "tg shebang must be Python" "got: $shebang"
+fi
+
 # ─── tg version ──────────────────────────────────────────────────────
 echo ""
 echo "── tg version ──"

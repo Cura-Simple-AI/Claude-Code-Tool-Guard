@@ -46,10 +46,10 @@ except ValueError:
     )
     MAX_SECS = 30
 
-# Recursion defence
-if os.environ.get("_SLEEP_TG_ACTIVE"):
-    os.execv(REAL_SLEEP, [REAL_SLEEP] + sys.argv[1:])
-os.environ["_SLEEP_TG_ACTIVE"] = "1"
+# Recursion shortcut removed (security review P1): env-var sentinel
+# was a bypass vector. Sleep is a leaf binary that doesn't recurse,
+# so re-running the validator on a hypothetical recursive call is
+# both safe and effectively never happens in practice.
 
 _DURATION_RE = re.compile(r"^(\d+(?:\.\d+)?)([smhd]?)$")
 _UNITS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}

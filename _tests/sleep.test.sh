@@ -192,10 +192,13 @@ assert_exit "missing real_bin → exit 127" 127 \
 assert_stderr "missing real_bin → clear error message" "real sleep binary not found" \
   tt SLEEP_TG_REAL_BIN=/nonexistent/path -- 5
 
-# ─── 7. Recursion sentinel ───────────────────────────────────────────
+# ─── 7. SECURITY: env-var sentinel bypass is closed (P1) ────────────
 echo ""
-echo "── 7. Recursion sentinel ──"
-assert_exit "_SLEEP_TG_ACTIVE=1 → execv real (no guard)" 0 \
+echo "── 7. No env-var bypass via _SLEEP_TG_ACTIVE ──"
+# Old behavior: any truthy _SLEEP_TG_ACTIVE made stub execv real bin
+# without threshold check — bypass via inheritable env vars. Now: the
+# env var is ignored entirely, threshold check always applies.
+assert_exit "_SLEEP_TG_ACTIVE=1 doesn't bypass guard (still blocks 999s)" 1 \
   tt _SLEEP_TG_ACTIVE=1 SLEEP_TG_REAL_BIN=/bin/true -- 999
 
 # Without sentinel + outside Claude (monkey-patched) → also passes through

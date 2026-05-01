@@ -712,18 +712,15 @@ def run(
     """
     secret_flags = frozenset(secret_flags)
 
-    # Late recursion guard (in case the stub forgot or env-var was added
-    # after the stub ran). On a hot recursion path the stub's own check
-    # is preferred — this is a safety net, not the primary defence.
-    sentinel = f"_{_env_prefix(tool_name)}_TG_ACTIVE"
+    # NOTE: env-var sentinel ("_<TOOL>_TG_ACTIVE") was previously used
+    # as a recursion-bypass optimization. Removed (P1 finding from
+    # security audit): env vars are user-poisonable, so any sentinel
+    # value the engine trusts becomes a bypass vector. The performance
+    # cost of running policy on legitimate recursion (rare — most CLIs
+    # don't self-invoke) is ~1ms per call, well below the noise floor.
     real_bin_override = _env(tool_name, "REAL_BIN")
     if real_bin_override:
         real_bin = real_bin_override
-    if os.environ.get(sentinel) and os.environ.get(sentinel) != "1":
-        # Sentinel set to anything other than our own '1' marker — assume
-        # we're nested inside another invocation and exec real bin.
-        os.execv(real_bin, [real_bin] + sys.argv[1:])
-    os.environ[sentinel] = "1"
 
     if not (os.path.isfile(real_bin) and os.access(real_bin, os.X_OK)):
         # Combined check covers:

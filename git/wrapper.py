@@ -10,9 +10,7 @@ import sys
 TOOL = "git"
 REAL = os.environ.get("GIT_TG_REAL_BIN", "/usr/bin/git")
 
-if os.environ.get("_GIT_TG_ACTIVE"):
-    os.execv(REAL, [REAL] + sys.argv[1:])
-os.environ["_GIT_TG_ACTIVE"] = "1"
+# Recursion shortcut removed (security review P1). See az/wrapper.py.
 
 _engine_dirs = ([os.environ["TOOL_GUARD_ENGINE_DIR"]]
                 if os.environ.get("TOOL_GUARD_ENGINE_DIR")

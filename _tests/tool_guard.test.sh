@@ -30,15 +30,14 @@ mkdir -p "$GUARDS_DIR" "$WORK_DIR" "$TESTTOOL_DIR"
 
 cat > "$TESTTOOL_DIR/wrapper.py" << 'PYEOF'
 #!/usr/bin/env python3
-"""testtool — throwaway stub for engine tests."""
+"""testtool — throwaway stub for engine tests.
+
+No recursion shortcut (matches production stubs after security review
+removed env-var sentinel as a bypass vector). Engine always runs."""
 import os, sys
 
 TOOL = "testtool"
 REAL = os.environ.get("TESTTOOL_TG_REAL_BIN", "/bin/true")
-
-if os.environ.get("_TESTTOOL_TG_ACTIVE"):
-    os.execv(REAL, [REAL] + sys.argv[1:])
-os.environ["_TESTTOOL_TG_ACTIVE"] = "1"
 
 ENGINE_DIR = os.environ["TOOL_GUARD_ENGINE_DIR"]
 sys.path.insert(0, ENGINE_DIR)
@@ -186,15 +185,19 @@ assert_stderr "claude_only fires under Claude" "classify=warn" \
 assert_stderr "claude_only skipped not-under-Claude" "classify=allow rule=<defaultMode>" \
   TESTTOOL_TG_DRYRUN=1 TESTTOOL_TG_FAKE_CLAUDE=0 -- risky operation
 
-# ─── 6. Recursion sentinel ───────────────────────────────────────────
+# ─── 6. Recursion sentinel REMOVED (security review P1) ─────────────
 echo ""
-echo "── 6. Recursion sentinel ──"
+echo "── 6. No env-var recursion bypass exists ──"
 clear_configs
-write_config '{"defaultMode":"deny"}'  # would deny if engine ran
+write_config '{"defaultMode":"deny"}'
 
-# When _TESTTOOL_TG_ACTIVE=1, stub execv's real_bin without engine
-assert_stdout "recursion sentinel → execv real_bin" "hello recursion" \
-  _TESTTOOL_TG_ACTIVE=1 TESTTOOL_TG_REAL_BIN=/bin/echo -- hello recursion
+# Setting the legacy sentinel must NOT bypass policy. Old behavior: a
+# stub or engine that saw _TESTTOOL_TG_ACTIVE=<truthy> execv'd the real
+# binary without policy check (designed as recursion shortcut, but env
+# vars are inheritable so this was a bypass vector). Now: env var is
+# entirely ignored, policy always runs.
+assert_exit "_TG_ACTIVE=1 doesn't bypass policy (would-be-deny still denies)" 13 \
+  _TESTTOOL_TG_ACTIVE=1 TESTTOOL_TG_REAL_BIN=/bin/echo -- some unmatched cmd
 
 # ─── 7. Logging ──────────────────────────────────────────────────────
 echo ""
@@ -1342,6 +1345,44 @@ ec=$?
 assert_eq "non-matching call still denied via home config" "13" "$ec"
 
 rm -rf "$FAKE_HOME" "$LOG_DIR"
+
+# ─── 31. SECURITY: env-var sentinel bypass — fully closed (P1 #2) ────
+echo ""
+echo "── 31. SECURITY: env-var sentinel bypass closed (P1 #2) ──"
+clear_configs
+write_config '{"defaultMode":"deny","allow":[],"warn":[],"deny":[]}'
+
+# Engine + stubs must IGNORE _<TOOL>_TG_ACTIVE entirely. Previous design
+# used it as a recursion-bypass shortcut, which became an attack vector
+# (env vars are inheritable + user-poisonable). After fix: any value is
+# ignored, policy always runs.
+LOG_DIR=$(mktemp -d)
+for sentinel_value in "1" "bypass" "0" "false" "yes" "evil" "anything"; do
+  out=$(tt _TESTTOOL_TG_ACTIVE="$sentinel_value" \
+           TESTTOOL_TG_LOG_DIR="$LOG_DIR" \
+           -- definitely-not-allowed arg 2>&1)
+  ec=$?
+  # Must be denied (exit 13 = DENY_EXIT_CODE) regardless of sentinel value
+  if [[ $ec -eq 13 ]]; then
+    pass "sentinel=$sentinel_value → engine still applies policy (exit 13)"
+  else
+    fail "sentinel=$sentinel_value bypass" "exit=$ec out=$(echo "$out" | head -1)"
+  fi
+done
+
+# All 7 attempts must produce log entries (no silent bypass)
+LOG_FILE=$(ls "$LOG_DIR"/*.log 2>/dev/null | head -1)
+if [[ -f "$LOG_FILE" ]]; then
+  n=$(wc -l < "$LOG_FILE")
+  if [[ $n -ge 7 ]]; then
+    pass "all 7 sentinel-poisoning attempts were logged (no silent bypass)"
+  else
+    fail "sentinel bypass" "only $n log entries, expected 7"
+  fi
+else
+  fail "sentinel bypass" "no log file written"
+fi
+rm -rf "$LOG_DIR"
 
 # ─── Result ──────────────────────────────────────────────────────────
 echo ""

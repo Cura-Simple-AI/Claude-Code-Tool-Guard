@@ -11,9 +11,7 @@ import sys
 TOOL = "gh"
 REAL = os.environ.get("GH_TG_REAL_BIN", "/usr/bin/gh")
 
-if os.environ.get("_GH_TG_ACTIVE"):
-    os.execv(REAL, [REAL] + sys.argv[1:])
-os.environ["_GH_TG_ACTIVE"] = "1"
+# Recursion shortcut removed (security review P1). See az/wrapper.py.
 
 _engine_dirs = ([os.environ["TOOL_GUARD_ENGINE_DIR"]]
                 if os.environ.get("TOOL_GUARD_ENGINE_DIR")

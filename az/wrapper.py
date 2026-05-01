@@ -16,10 +16,11 @@ import sys
 TOOL = "az"
 REAL = os.environ.get("AZ_TG_REAL_BIN", "/usr/bin/az")
 
-# Recursion defence — fast path before importing the engine.
-if os.environ.get("_AZ_TG_ACTIVE"):
-    os.execv(REAL, [REAL] + sys.argv[1:])
-os.environ["_AZ_TG_ACTIVE"] = "1"
+# NOTE: previously used env-var sentinel _AZ_TG_ACTIVE for a
+# recursion shortcut. Removed (security review P1 finding): env vars
+# are inheritable + user-poisonable, so trusting any sentinel value
+# created a bypass vector. Engine always runs policy now; recursion
+# cost is ~1ms (well below noise) and most CLIs don't self-invoke.
 
 # Locate engine. TOOL_GUARD_ENGINE_DIR (single dir) overrides if set —
 # useful for tests and for pointing at a checked-out engine. Otherwise:

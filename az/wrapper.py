@@ -2,19 +2,22 @@
 """az tool-guard — thin stub that delegates to the shared tool_guard engine.
 
 All policy enforcement (config loading, classification, prompt, log,
-redact, force-override, dry-run, recursion defence) lives in
-scripts/tool-guard/tool_guard.py. This file just declares the per-tool
-constants (tool name, real binary path, secret-bearing flags) and calls
-into the engine.
+redact, dry-run) lives in scripts/tool-guard/tool_guard.py. This file
+just declares the per-tool constants (tool name, real binary path,
+secret-bearing flags) and calls into the engine.
 
 See scripts/tool-guard/README.md for the system architecture and
 scripts/tool-guard/az/POLICY.md for az-specific policy notes.
 """
+# TOOL_GUARD_STUB_v1 — canonical magic line. Detection helpers (tg's
+# _is_our_wrapper, _guard_installed, install.sh's overwrite check)
+# look for this exact comment to identify our stubs. Do NOT remove or
+# change without updating those callers in lockstep.
 import os
 import sys
 
 TOOL = "az"
-REAL = os.environ.get("AZ_TG_REAL_BIN", "/usr/bin/az")
+REAL = os.environ.get("AZ_TG_REAL_BIN", "/usr/bin/az")  # TG_REAL_BIN_DEFAULT
 
 # NOTE: previously used env-var sentinel _AZ_TG_ACTIVE for a
 # recursion shortcut. Removed (security review P1 finding): env vars

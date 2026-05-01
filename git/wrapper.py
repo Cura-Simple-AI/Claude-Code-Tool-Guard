@@ -4,11 +4,12 @@
 All policy enforcement lives in scripts/tool-guard/tool_guard.py.
 See scripts/tool-guard/git/POLICY.md for git-specific policy notes.
 """
+# TOOL_GUARD_STUB_v1 — canonical magic line. See az/wrapper.py header.
 import os
 import sys
 
 TOOL = "git"
-REAL = os.environ.get("GIT_TG_REAL_BIN", "/usr/bin/git")
+REAL = os.environ.get("GIT_TG_REAL_BIN", "/usr/bin/git")  # TG_REAL_BIN_DEFAULT
 
 # Recursion shortcut removed (security review P1). See az/wrapper.py.
 

@@ -26,13 +26,16 @@ Environment variables:
   SLEEP_TG_REAL_BIN   override /usr/bin/sleep (e.g. for tests)
   _SLEEP_TG_ACTIVE    internal recursion sentinel
 """
+# TOOL_GUARD_STUB_v1 — canonical magic line. See az/wrapper.py header.
+# (Sleep is a numeric guard, not engine-based, but uses the same marker
+# so detection helpers treat it consistently.)
 from __future__ import annotations
 
 import os
 import re
 import sys
 
-REAL_SLEEP = os.environ.get("SLEEP_TG_REAL_BIN", "/usr/bin/sleep")
+REAL_SLEEP = os.environ.get("SLEEP_TG_REAL_BIN", "/usr/bin/sleep")  # TG_REAL_BIN_DEFAULT
 
 # Defensive parsing of SLEEP_TG_MAX — a typo in the env value should
 # warn + fall back to the default rather than crash the tool-guard.

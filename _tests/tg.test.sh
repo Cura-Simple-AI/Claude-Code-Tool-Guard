@@ -215,7 +215,7 @@ cat > "$SANDBOX/fakeguard/wrapper.py" <<'EOF'
 """fakeguard — tool guard test stub."""
 import os, sys
 TOOL = "fakeguard"
-REAL = os.environ.get("FAKEGUARD_TG_REAL_BIN", "/usr/bin/fakeguard")
+REAL = os.environ.get("FAKEGUARD_TG_REAL_BIN", "/usr/bin/fakeguard")  # TG_REAL_BIN_DEFAULT
 if os.environ.get("_FAKEGUARD_TG_ACTIVE"):
     os.execv(REAL, [REAL] + sys.argv[1:])
 os.environ["_FAKEGUARD_TG_ACTIVE"] = "1"
@@ -303,7 +303,7 @@ cat > "$SANDBOX/fakeguard/wrapper.py" <<'EOF'
 """fakeguard — tool guard test stub."""
 import os, sys
 TOOL = "fakeguard"
-REAL = os.environ.get("FAKEGUARD_TG_REAL_BIN", "/usr/bin/fakeguard")
+REAL = os.environ.get("FAKEGUARD_TG_REAL_BIN", "/usr/bin/fakeguard")  # TG_REAL_BIN_DEFAULT
 if os.environ.get("_FAKEGUARD_TG_ACTIVE"):
     os.execv(REAL, [REAL] + sys.argv[1:])
 os.environ["_FAKEGUARD_TG_ACTIVE"] = "1"
@@ -332,7 +332,7 @@ cat > "$SANDBOX/fakeguard/wrapper.py" <<'EOF'
 """fakeguard — tool guard test stub."""
 import os, sys
 TOOL = "fakeguard"
-REAL = os.environ.get("FAKEGUARD_TG_REAL_BIN", "/usr/bin/fakeguard")
+REAL = os.environ.get("FAKEGUARD_TG_REAL_BIN", "/usr/bin/fakeguard")  # TG_REAL_BIN_DEFAULT
 EOF
 out=$(run_tg_install 2>&1)
 assert_contains "auto-discover sees fakeguard" "fakeguard" "$out"
@@ -353,8 +353,9 @@ RO_TMP=$(mktemp -d)
 RO_STUB="$RO_TMP/wrapper.py"
 cat > "$RO_STUB" <<'EOF'
 #!/usr/bin/env python3
+# TOOL_GUARD_STUB_v1
 import os
-REAL = os.environ.get("FOO_TG_REAL_BIN", "/usr/bin/foo")
+REAL = os.environ.get("FOO_TG_REAL_BIN", "/usr/bin/foo")  # TG_REAL_BIN_DEFAULT
 EOF
 chmod 0444 "$RO_STUB"
 result=$(python3 -c "
@@ -764,6 +765,96 @@ out=$(cd "$ANCHOR_TMP" && "$TG" config validate 2>&1)
 ec=$?
 assert_eq "glob deny rules not subject to anchor warning" "0" "$ec"
 rm -rf "$ANCHOR_TMP"
+
+# ─── Stub canonical-marker drift detection (Aksel P1) ───────────────
+echo ""
+echo "── stub template drift detection ──"
+
+# Every production stub MUST carry the TOOL_GUARD_STUB_v1 magic line
+# AND the TG_REAL_BIN_DEFAULT marker on its REAL_BIN assignment.
+# Without these, _is_our_wrapper / _guard_installed silently misclassify
+# (false negatives → install.sh refuses to overwrite our own stubs;
+# false positives → we overwrite a real binary).
+PROD_STUBS_DIR="$(dirname "$TG")"
+for stub_dir in az gh git sleep; do
+  stub_path="$PROD_STUBS_DIR/$stub_dir/wrapper.py"
+  [[ -f "$stub_path" ]] || continue
+  if grep -qF "TOOL_GUARD_STUB_v1" "$stub_path"; then
+    pass "production stub '$stub_dir' has TOOL_GUARD_STUB_v1 marker"
+  else
+    fail "stub '$stub_dir' missing magic line" "$(head -3 "$stub_path")"
+  fi
+  if grep -qF "TG_REAL_BIN_DEFAULT" "$stub_path"; then
+    pass "production stub '$stub_dir' has TG_REAL_BIN_DEFAULT marker"
+  else
+    fail "stub '$stub_dir' missing REAL_BIN marker"
+  fi
+done
+
+# tg add must emit a stub WITH both markers (was a P1: scaffolded
+# stubs were stale and lacked the security model of production stubs).
+ADD_DRIFT_SANDBOX=$(mktemp -d)
+cp "$TG" "$ADD_DRIFT_SANDBOX/tg"
+chmod +x "$ADD_DRIFT_SANDBOX/tg"
+touch "$ADD_DRIFT_SANDBOX/tool_guard.py"
+"$ADD_DRIFT_SANDBOX/tg" add scaffoldcheck >/dev/null 2>&1
+GENERATED="$ADD_DRIFT_SANDBOX/scaffoldcheck/wrapper.py"
+if [[ -f "$GENERATED" ]]; then
+  if grep -qF "TOOL_GUARD_STUB_v1" "$GENERATED"; then
+    pass "tg add scaffold has TOOL_GUARD_STUB_v1 marker"
+  else
+    fail "tg add scaffold missing magic line" "$(head -10 "$GENERATED")"
+  fi
+  if grep -qF "TG_REAL_BIN_DEFAULT" "$GENERATED"; then
+    pass "tg add scaffold has TG_REAL_BIN_DEFAULT marker"
+  else
+    fail "tg add scaffold missing REAL_BIN marker"
+  fi
+  # Critical regression: scaffold must NOT contain the removed
+  # _<TOOL>_TG_ACTIVE recursion sentinel pattern (was a P1 bypass).
+  if grep -qE "_SCAFFOLDCHECK_TG_ACTIVE" "$GENERATED"; then
+    fail "tg add scaffold STILL contains removed sentinel pattern" "regression"
+  else
+    pass "tg add scaffold does NOT have removed sentinel pattern"
+  fi
+  # Must contain the TG_TEST_MODE gating
+  if grep -qF "TG_TEST_MODE" "$GENERATED"; then
+    pass "tg add scaffold gates TOOL_GUARD_ENGINE_DIR behind TG_TEST_MODE"
+  else
+    fail "tg add scaffold missing TG_TEST_MODE gating"
+  fi
+fi
+rm -rf "$ADD_DRIFT_SANDBOX"
+
+# _patch_real_bin must work for both REAL and REAL_SLEEP variable names
+PATCH_TMP=$(mktemp -d)
+cp "$TG" "$PATCH_TMP/tgmod.py"
+for varname in REAL REAL_SLEEP; do
+  STUB_FILE="$PATCH_TMP/wrapper-$varname.py"
+  cat > "$STUB_FILE" <<EOF
+#!/usr/bin/env python3
+# TOOL_GUARD_STUB_v1
+import os
+$varname = os.environ.get("MYTOOL_TG_REAL_BIN", "/usr/bin/mytool")  # TG_REAL_BIN_DEFAULT
+EOF
+  result=$("$PY3" -c "
+import sys, pathlib; sys.path.insert(0, '$PATCH_TMP')
+import tgmod
+patched, msg = tgmod._patch_real_bin(pathlib.Path('$STUB_FILE'), 'mytool', '/opt/mytool')
+print(f'patched={patched}|msg={msg}')
+")
+  case "$result" in
+    patched=True*) pass "_patch_real_bin works with var name '$varname'" ;;
+    *) fail "_patch_real_bin var name '$varname'" "$result" ;;
+  esac
+  # Verify variable name preserved in the patched line
+  if grep -qE "^${varname} = os.environ.get" "$STUB_FILE"; then
+    pass "  → variable name '$varname' preserved"
+  else
+    fail "  → variable name '$varname' clobbered" "$(grep TG_REAL_BIN_DEFAULT "$STUB_FILE")"
+  fi
+done
+rm -rf "$PATCH_TMP"
 
 # ─── Result ──────────────────────────────────────────────────────────
 echo ""

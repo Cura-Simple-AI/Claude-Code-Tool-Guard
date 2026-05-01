@@ -5,11 +5,12 @@ All policy enforcement lives in scripts/tool-guard/tool_guard.py.
 See scripts/tool-guard/gh/POLICY.md for gh-specific policy notes
 (in particular the PR-body autoclose-keyword warnings).
 """
+# TOOL_GUARD_STUB_v1 — canonical magic line. See az/wrapper.py header.
 import os
 import sys
 
 TOOL = "gh"
-REAL = os.environ.get("GH_TG_REAL_BIN", "/usr/bin/gh")
+REAL = os.environ.get("GH_TG_REAL_BIN", "/usr/bin/gh")  # TG_REAL_BIN_DEFAULT
 
 # Recursion shortcut removed (security review P1). See az/wrapper.py.
 

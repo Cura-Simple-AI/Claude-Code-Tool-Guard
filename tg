@@ -1,0 +1,871 @@
+#!/usr/bin/env python3
+"""tg — tool-guard management CLI.
+
+Convenience commands for the tool-guard policy system. Wraps the
+existing install.sh / uninstall.sh + adds inspection, dry-run, log
+viewing, config printing, and new-tool-guard scaffolding. No external
+dependencies — pure stdlib.
+
+Usage:
+  tg <command> [args...]
+
+Commands:
+  list                    list installed tool-guard + the engine
+  status [tool]           show install + config + log status (all tools, or one)
+  check <tool> <args...>  dry-run classify a command (no exec)
+  install [name...]       install engine + named tool-guard (delegates to install.sh)
+  uninstall [name...]     uninstall named tool-guard + engine (delegates to uninstall.sh)
+  log <tool> [-n N]       show last N log entries (default 10)
+  config show <tool>      print the merged effective config for a tool
+  add <tool>              scaffold a new tool-guard (stub + example config)
+  test                    run all test suites
+  version                 show tool-guard version
+  help [command]          show help (this text, or detail for one command)
+
+Examples:
+  tg status
+  tg check az group delete --name foo
+  tg log az -n 20
+  tg add gh
+  tg config show git
+
+The CLI installs to /usr/local/bin/tg via install.sh — see EXTRACT.md
+and README.md for the broader install/extract story.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+VERSION = "0.1.0"
+
+INSTALL_DIR = Path("/usr/local/bin")
+ENGINE_DIR = Path("/usr/local/lib/tool-guard")
+LOG_DIR_BASE = Path("/tmp/tool-guard-logs")
+
+# Resolve PKG_ROOT relative to this script's location. Works both inside
+# the parent repo (scripts/tool-guard/) and post-extract (extracted root).
+_HERE = Path(__file__).resolve().parent
+PKG_ROOT = _HERE
+
+
+def _color_supported() -> bool:
+    return sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+
+
+def _c(text: str, code: str) -> str:
+    if not _color_supported():
+        return text
+    return f"\033[{code}m{text}\033[0m"
+
+
+def _green(s: str) -> str:  return _c(s, "32")
+def _red(s: str) -> str:    return _c(s, "31")
+def _yellow(s: str) -> str: return _c(s, "33")
+def _bold(s: str) -> str:   return _c(s, "1")
+def _dim(s: str) -> str:    return _c(s, "2")
+
+
+# ─── Discovery ────────────────────────────────────────────────────────
+
+
+def _discover_guards() -> list[str]:
+    """List tool-guard names from PKG_ROOT/<name>/wrapper.py. Skips _-prefixed dirs."""
+    names = []
+    for d in sorted(PKG_ROOT.iterdir()):
+        if not d.is_dir() or d.name.startswith("_") or d.name.startswith("."):
+            continue
+        if d.name in ("examples",):
+            continue
+        if (d / "wrapper.py").is_file():
+            names.append(d.name)
+    return names
+
+
+def _find_guards_dir(start: Path | None = None) -> Path | None:
+    """Walk up from start (default cwd) looking for a `.tool-guard/` dir."""
+    p = (start or Path.cwd()).resolve()
+    for _ in range(20):
+        c = p / ".tool-guard"
+        if c.is_dir():
+            return c
+        if p == p.parent:
+            return None
+        p = p.parent
+    return None
+
+
+def _engine_installed() -> Path | None:
+    p = ENGINE_DIR / "tool_guard.py"
+    return p if p.is_file() else None
+
+
+def _guard_installed(name: str) -> Path | None:
+    """Return path if /usr/local/bin/<name> is OUR tool-guard (Python script
+    referencing tool_guard). Returns None if the binary is missing OR if
+    it's something else (e.g. the real /usr/bin/git that ships with the
+    OS, accidentally copied to /usr/local/bin/git)."""
+    p = INSTALL_DIR / name
+    if not (p.is_file() and os.access(p, os.X_OK)):
+        return None
+    # Validate it's ours: Python shebang + references "tool_guard"
+    try:
+        with p.open("rb") as f:
+            head = f.read(2048)
+    except OSError:
+        return None
+    if not head.startswith(b"#!") or b"python" not in head.split(b"\n", 1)[0]:
+        return None
+    if b"tool_guard" not in head and b"WRAPPER_ACTIVE" not in head:
+        return None
+    return p
+
+
+def _log_file(name: str) -> Path | None:
+    """Most recent JSONL log file for a tool-guard, or None."""
+    d = LOG_DIR_BASE / name
+    if not d.is_dir():
+        return None
+    files = sorted(d.glob("calls-*.jsonl"))
+    return files[-1] if files else None
+
+
+# ─── Commands ─────────────────────────────────────────────────────────
+
+
+def cmd_list(_args) -> int:
+    """List discoverable tool-guard + their installed status."""
+    print(f"{_bold('Tool-guard in package')} ({PKG_ROOT}):")
+    guards = _discover_guards()
+    if not guards:
+        print(_dim("  (none discovered)"))
+    for name in guards:
+        installed = _guard_installed(name)
+        marker = _green("✓ installed") if installed else _dim("not installed")
+        print(f"  {name:<10} {marker}" + (f" ({installed})" if installed else ""))
+    print()
+    engine = _engine_installed()
+    if engine:
+        print(f"{_bold('Engine')}: {_green('✓ installed')} ({engine})")
+    else:
+        print(f"{_bold('Engine')}: {_dim('not installed')} (run `tg install`)")
+    return 0
+
+
+def cmd_status(args) -> int:
+    """Show install + config + log status. Optionally filter to one tool."""
+    target = args.tool
+    guards = [target] if target else _discover_guards()
+
+    cwd_dir = _find_guards_dir()
+    if cwd_dir:
+        print(f"{_bold('Config dir')} ({_dim('walked up from cwd')}): {cwd_dir}")
+    else:
+        print(f"{_bold('Config dir')}: {_red('not found')} ({_dim('no .tool-guard/ in any ancestor of cwd')})")
+    print()
+
+    for name in guards:
+        if not (PKG_ROOT / name / "wrapper.py").is_file():
+            print(f"{_yellow('?')} {name}: not in package")
+            continue
+
+        installed = _guard_installed(name)
+        if installed:
+            print(f"{_green('●')} {_bold(name):<24} installed at {installed}")
+        else:
+            print(f"{_dim('○')} {_bold(name):<24} not installed")
+
+        # Config files (per-tool)
+        if cwd_dir:
+            shared = cwd_dir / f"{name}.config.json"
+            local = cwd_dir / f"{name}.config.local.json"
+            print(f"    shared cfg:   {_green('✓') if shared.exists() else _dim('—')} {shared}")
+            print(f"    local cfg:    {_green('✓') if local.exists() else _dim('—')} {local}")
+        # Log
+        log = _log_file(name)
+        if log:
+            try:
+                count = sum(1 for _ in log.open())
+                print(f"    log:          {_green('✓')} {log} ({count} entries)")
+            except OSError:
+                print(f"    log:          {_yellow('?')} {log}")
+        else:
+            print(f"    log:          {_dim('—')} {LOG_DIR_BASE / name}/ (no entries yet)")
+        print()
+
+    return 0
+
+
+def cmd_check(args) -> int:
+    """Dry-run classify a command. Pretty-formatted output explaining the
+    decision + matched rule + custom message (if any) + what would happen
+    if you ran the command for real."""
+    tool = args.tool
+    extra = args.args
+    wrapper_path = PKG_ROOT / tool / "wrapper.py"
+    if not wrapper_path.is_file():
+        print(_red(f"tg: no tool-guard for tool '{tool}' at {wrapper_path}"), file=sys.stderr)
+        print(f"     Available: {', '.join(_discover_guards()) or '(none)'}", file=sys.stderr)
+        return 1
+
+    cmd_repr = f"{tool} {' '.join(extra)}"
+    print(f"{_bold('Checking:')} {cmd_repr}")
+    print()
+
+    # Run the tool-guard in dry-run mode and capture stderr (where DRYRUN line
+    # is printed). Use the engine's classify directly for richer info
+    # (matched rule, custom message), but fall back to the dry-run line
+    # if engine isn't importable.
+    env_prefix = tool.upper().replace("-", "_")
+    env = os.environ.copy()
+    env[f"{env_prefix}_TG_DRYRUN"] = "1"
+    env.setdefault(f"{env_prefix}_TG_REAL_BIN", "/bin/true")
+    proc = subprocess.run(
+        [sys.executable, str(wrapper_path), *extra],
+        env=env, capture_output=True, text=True,
+    )
+    line = (proc.stderr or proc.stdout or "").strip().splitlines()[0] if (proc.stderr or proc.stdout) else ""
+
+    # Parse the DRYRUN line: "DRYRUN: classify=X rule=Y under_claude=Z — outcome"
+    decision = _extract(line, "classify=")
+    rule = _extract(line, "rule=")
+    under_claude = _extract(line, "under_claude=")
+
+    # Render decision with color + icon
+    icons = {"allow": ("✅", _green), "warn": ("⚠ ", _yellow),
+             "deny": ("❌", _red), "prompt": ("❓", _yellow)}
+    icon, color = icons.get(decision, ("?", _bold))
+    decision_label = {
+        "allow":  "ALLOWED",
+        "warn":   "ALLOWED with WARNING",
+        "deny":   "DENIED",
+        "prompt": "WOULD PROMPT (TTY) or AUTO-DENY (non-TTY)",
+    }.get(decision, decision.upper() if decision else "UNKNOWN")
+
+    print(f"  {icon} {color(_bold(decision_label))}")
+    print(f"     rule:         {rule or _dim('(no rule — defaultMode)')}")
+    print(f"     under Claude: {under_claude or _dim('(unknown)')}")
+
+    # If the rule matched, fetch its message from the engine for richer output
+    msg = _fetch_rule_message(tool, rule)
+    if msg:
+        print(f"     message:      ", end="")
+        for i, line in enumerate(msg.splitlines()):
+            print(("" if i == 0 else "                  ") + line)
+
+    # Tell the user what would happen on a real (non-dryrun) invocation
+    print()
+    if decision == "deny":
+        print(f"  {_dim('Would exit with code 13. Override:')}")
+        print(f"  {_dim(f'    {env_prefix}_TG_FORCE=1 {cmd_repr}')}")
+    elif decision == "warn":
+        print(f"  {_dim('Would print warning to stderr + execute the real binary.')}")
+    elif decision == "allow":
+        print(f"  {_dim('Would log + execute the real binary.')}")
+    elif decision == "prompt":
+        print(f"  {_dim('Interactive shell: prompts [a/A/d/D]. Non-TTY (CI, scripts): auto-deny.')}")
+
+    return 0
+
+
+def _extract(line: str, key: str) -> str:
+    """Extract value of `key=value` from a string. Handles quoted values like rule="foo*"."""
+    idx = line.find(key)
+    if idx < 0:
+        return ""
+    rest = line[idx + len(key):]
+    if rest.startswith('"'):
+        end = rest.find('"', 1)
+        return rest[1:end] if end > 0 else rest[1:]
+    return rest.split(" ", 1)[0].rstrip(",")
+
+
+def cmd_config_edit(args) -> int:
+    """Open the shared (or local) config file in $EDITOR. Creates it
+    from the example template if it doesn't exist yet."""
+    cwd_dir = _find_guards_dir()
+    if cwd_dir is None:
+        # Create .tool-guard/ at cwd as a starting point
+        cwd_dir = Path.cwd() / ".tool-guard"
+        try:
+            cwd_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            print(_red(f"tg: cannot create {cwd_dir}: {e}"), file=sys.stderr)
+            return 1
+        print(_dim(f"  (created {cwd_dir})"))
+
+    suffix = ".local.json" if args.local else ".json"
+    target = cwd_dir / f"{args.tool}.config{suffix}"
+    if not target.exists():
+        # Copy from example if available, else create empty
+        example = PKG_ROOT / "examples" / ".tool-guard" / f"{args.tool}.config.json"
+        if example.exists() and not args.local:
+            shutil.copy(example, target)
+            print(_green(f"  ✓ Copied template from {example}"))
+        else:
+            stub = {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "_comment": (
+                    f"Per-{'user' if args.local else 'team'} {args.tool}-tool-guard policy."
+                    + (" Gitignored." if args.local else "")
+                ),
+                "defaultMode": "prompt",
+                "allow": [],
+                "warn": [],
+                "deny": [],
+            }
+            target.write_text(json.dumps(stub, indent=2) + "\n")
+            print(_green(f"  ✓ Created empty config"))
+        print(f"  {target}")
+
+    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "vi"
+    print(_dim(f"  Opening {target} in $EDITOR ({editor})..."))
+    return subprocess.run([editor, str(target)]).returncode
+
+
+def cmd_config_init(args) -> int:
+    """Initialize .tool-guard/<tool>.config.json from the example template."""
+    cwd_dir = _find_guards_dir()
+    if cwd_dir is None:
+        cwd_dir = Path.cwd() / ".tool-guard"
+        cwd_dir.mkdir(parents=True, exist_ok=True)
+        print(_dim(f"  Created {cwd_dir}"))
+
+    target = cwd_dir / f"{args.tool}.config.json"
+    if target.exists() and not args.force:
+        print(_red(f"tg: {target} already exists. Use --force to overwrite."), file=sys.stderr)
+        return 1
+
+    example = PKG_ROOT / "examples" / ".tool-guard" / f"{args.tool}.config.json"
+    if not example.exists():
+        print(_red(f"tg: no example template for '{args.tool}' at {example}"), file=sys.stderr)
+        print(f"     Available: {', '.join(sorted(p.stem.replace('.config','') for p in (PKG_ROOT / 'examples' / '.tool-guard').glob('*.json') if not p.name.startswith('_')))}", file=sys.stderr)
+        return 1
+
+    shutil.copy(example, target)
+    print(_green(f"✓ Initialized {target}"))
+    print(_dim(f"  (copied from {example})"))
+    print()
+    print("Also consider initializing _defaults.json (cross-cutting rules):")
+    defaults_target = cwd_dir / "_defaults.json"
+    defaults_example = PKG_ROOT / "examples" / ".tool-guard" / "_defaults.json"
+    if not defaults_target.exists() and defaults_example.exists():
+        print(f"  cp {defaults_example} {defaults_target}")
+    elif defaults_target.exists():
+        print(_dim(f"  (already exists at {defaults_target})"))
+
+    return 0
+
+
+def cmd_config_validate(args) -> int:
+    """Validate one or all tool-guard config files. Reports JSON syntax errors,
+    schema issues, and unknown defaultMode values."""
+    cwd_dir = _find_guards_dir()
+    if cwd_dir is None:
+        print(_red(f"tg: no .tool-guard/ found from cwd"), file=sys.stderr)
+        return 1
+
+    if args.tool:
+        files = [
+            cwd_dir / f"{args.tool}.config.json",
+            cwd_dir / f"{args.tool}.config.local.json",
+        ]
+    else:
+        files = sorted(cwd_dir.glob("*.json"))
+
+    files = [f for f in files if f.exists()]
+    if not files:
+        print(_dim(f"  (no config files found in {cwd_dir})"))
+        return 0
+
+    all_ok = True
+    for f in files:
+        issues = _validate_config_file(f)
+        if not issues:
+            print(f"  {_green('✓')} {f.name}")
+        else:
+            all_ok = False
+            print(f"  {_red('✗')} {f.name}:")
+            for issue in issues:
+                print(f"      {_red('•')} {issue}")
+    return 0 if all_ok else 1
+
+
+def _validate_config_file(path: Path) -> list[str]:
+    """Return a list of issue strings; empty if config is valid."""
+    issues = []
+    try:
+        with path.open() as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        return [f"invalid JSON: {e}"]
+    except OSError as e:
+        return [f"cannot read: {e}"]
+    if not isinstance(data, dict):
+        return [f"top-level must be an object, got {type(data).__name__}"]
+
+    valid_modes = {"deny", "allow", "warn", "prompt"}
+    is_defaults = path.name == "_defaults.json"
+
+    # defaultMode (per-tool only; defaults file shouldn't have it)
+    if "defaultMode" in data:
+        if is_defaults:
+            issues.append("_defaults.json should NOT have 'defaultMode' (it's per-tool)")
+        elif data["defaultMode"] not in valid_modes:
+            issues.append(
+                f"defaultMode={data['defaultMode']!r} invalid — must be one of {sorted(valid_modes)}"
+            )
+
+    # allow/warn/deny lists
+    for category in ("allow", "warn", "deny"):
+        if category not in data:
+            continue
+        rules = data[category]
+        if not isinstance(rules, list):
+            issues.append(f"'{category}' must be an array, got {type(rules).__name__}")
+            continue
+        for i, rule in enumerate(rules):
+            if isinstance(rule, str):
+                continue  # plain pattern, OK
+            if not isinstance(rule, dict):
+                issues.append(f"'{category}'[{i}] must be a string or object, got {type(rule).__name__}")
+                continue
+            if "pattern" not in rule:
+                issues.append(f"'{category}'[{i}] missing required 'pattern' field")
+                continue
+            if not isinstance(rule["pattern"], str):
+                issues.append(
+                    f"'{category}'[{i}].pattern must be a string, got {type(rule['pattern']).__name__}"
+                )
+            if "claude_only" in rule and not isinstance(rule["claude_only"], bool):
+                issues.append(
+                    f"'{category}'[{i}].claude_only must be true/false, got {type(rule['claude_only']).__name__}"
+                )
+            if "message" in rule and not isinstance(rule["message"], str):
+                issues.append(
+                    f"'{category}'[{i}].message must be a string, got {type(rule['message']).__name__}"
+                )
+            # Warn about unknown keys (don't fail — schema is forward-compatible)
+            known = {"pattern", "message", "claude_only"}
+            unknown = set(rule.keys()) - known
+            if unknown:
+                issues.append(f"'{category}'[{i}] unknown key(s): {sorted(unknown)} (will be ignored)")
+
+    return issues
+
+
+def _fetch_rule_message(tool: str, rule_pattern: str) -> str | None:
+    """Look up the rule's `message` field in the merged config, if present."""
+    if not rule_pattern or rule_pattern.startswith("<"):
+        return None
+    engine = _find_engine()
+    if not engine:
+        return None
+    sys.path.insert(0, str(engine.parent))
+    try:
+        from tool_guard import _load_config  # type: ignore
+    except ImportError:
+        return None
+    cfg = _load_config(tool)
+    for category in ("deny", "warn", "allow"):
+        for r in cfg.get(category, []):
+            if r.get("pattern") == rule_pattern:
+                return r.get("message")
+    return None
+
+
+def cmd_install(args) -> int:
+    """Delegate to install.sh."""
+    script = PKG_ROOT / "install.sh"
+    if not script.is_file():
+        print(_red(f"tg: install.sh not found at {script}"), file=sys.stderr)
+        return 1
+    return subprocess.run(["bash", str(script), *args.names]).returncode
+
+
+def cmd_uninstall(args) -> int:
+    """Delegate to uninstall.sh."""
+    script = PKG_ROOT / "uninstall.sh"
+    if not script.is_file():
+        print(_red(f"tg: uninstall.sh not found at {script}"), file=sys.stderr)
+        return 1
+    return subprocess.run(["bash", str(script), *args.names]).returncode
+
+
+def cmd_log(args) -> int:
+    """Show last N entries from the tool-guard's log."""
+    log = _log_file(args.tool)
+    if log is None:
+        print(_dim(f"tg: no log file for {args.tool} at {LOG_DIR_BASE / args.tool}/"), file=sys.stderr)
+        return 0
+    try:
+        with log.open() as f:
+            lines = f.readlines()
+    except OSError as e:
+        print(_red(f"tg: cannot read {log}: {e}"), file=sys.stderr)
+        return 1
+    tail = lines[-args.n :] if args.n > 0 else lines
+    for line in tail:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            print(_dim(f"  (malformed line) {line.rstrip()}"))
+            continue
+        ts = event.get("ts", "")
+        decision = event.get("policy", {}).get("decision", "?")
+        rule = event.get("policy", {}).get("rule") or "<defaultMode>"
+        argv = " ".join(event.get("argv", []))
+        exit_code = event.get("exit", "?")
+        ms = event.get("duration_ms", 0)
+        decision_colored = {
+            "allow": _green(decision),
+            "warn":  _yellow(decision),
+            "deny":  _red(decision),
+        }.get(decision, decision)
+        print(f"{_dim(ts)}  {decision_colored:<6}  {_dim(f'rule={rule}'):<30}  {args.tool} {argv}  {_dim(f'(exit={exit_code}, {ms}ms)')}")
+    return 0
+
+
+def cmd_config_show(args) -> int:
+    """Print the merged effective config for a tool (cwd-relative)."""
+    cwd_dir = _find_guards_dir()
+    if cwd_dir is None:
+        print(_red("tg: no .tool-guard/ found from cwd"), file=sys.stderr)
+        return 1
+
+    layers = [
+        ("shared",   cwd_dir / f"{args.tool}.config.json"),
+        ("local",    cwd_dir / f"{args.tool}.config.local.json"),
+        ("defaults", cwd_dir / "_defaults.json"),
+    ]
+    print(f"{_bold('Resolved config for')} {args.tool}:")
+    print(f"  config dir: {cwd_dir}")
+    print()
+    for label, path in layers:
+        marker = _green("✓") if path.exists() else _dim("—")
+        print(f"  {marker} {label:<10} {path}")
+    print()
+
+    # Merge using the engine itself for a true reflection of behavior.
+    engine = _find_engine()
+    if not engine:
+        print(_red("tg: engine not found, can't compute merged config"), file=sys.stderr)
+        return 1
+    sys.path.insert(0, str(engine.parent))
+    try:
+        from tool_guard import _load_config  # type: ignore
+    except ImportError as e:
+        print(_red(f"tg: failed to import engine: {e}"), file=sys.stderr)
+        return 1
+    merged = _load_config(args.tool)
+    print(f"{_bold('Merged effective config:')}")
+    print(json.dumps(merged, indent=2, default=str))
+    return 0
+
+
+def _find_engine() -> Path | None:
+    """Find tool_guard.py in installed location or alongside this script."""
+    for cand in (ENGINE_DIR / "tool_guard.py", PKG_ROOT / "tool_guard.py"):
+        if cand.is_file():
+            return cand
+    return None
+
+
+_RESERVED_NAMES = {
+    "examples", "_tests", "__pycache__",       # package internal dirs
+    "tg", "tool_guard", "tool-guard",           # package files / brand
+    "install", "uninstall",                     # orchestrator scripts (without .sh)
+    "tests", "lib", "bin", "src", "scripts",    # generic dirs that confuse layout
+}
+
+
+def cmd_add(args) -> int:
+    """Scaffold a new tool-guard: <tool>/wrapper.py + example config."""
+    name = args.tool
+    if not name or not name.replace("-", "").isalnum():
+        print(_red(f"tg: invalid tool name '{name}' — use only alphanumerics + dashes"), file=sys.stderr)
+        return 1
+    if name.startswith("-") or name.endswith("-"):
+        print(_red(f"tg: tool name '{name}' must not start or end with a dash"), file=sys.stderr)
+        return 1
+    if name in _RESERVED_NAMES:
+        print(
+            _red(f"tg: '{name}' is reserved (collides with package layout)"),
+            file=sys.stderr,
+        )
+        print(f"     Reserved: {', '.join(sorted(_RESERVED_NAMES))}", file=sys.stderr)
+        return 1
+
+    target_dir = PKG_ROOT / name
+    if target_dir.exists():
+        print(_red(f"tg: {target_dir} already exists. Edit the existing tool-guard or remove it first."), file=sys.stderr)
+        return 1
+
+    target_dir.mkdir()
+    upper = name.upper().replace("-", "_")
+
+    stub = f'''#!/usr/bin/env python3
+"""{name} tool-guard — delegates to tool_guard engine.
+
+See ../README.md for system architecture and ./POLICY.md for {name}-specific
+policy notes (you may want to write that file).
+"""
+import os
+import sys
+
+TOOL = "{name}"
+REAL = os.environ.get("{upper}_TG_REAL_BIN", "/usr/bin/{name}")
+
+# Recursion defence — fast path before importing the engine.
+if os.environ.get("_{upper}_TG_ACTIVE"):
+    os.execv(REAL, [REAL] + sys.argv[1:])
+os.environ["_{upper}_TG_ACTIVE"] = "1"
+
+# Locate engine: installed location first, then source-relative for dev/test.
+for _cand in ("/usr/local/lib/tool-guard",
+              os.path.dirname(os.path.dirname(os.path.abspath(__file__)))):
+    if os.path.exists(os.path.join(_cand, "tool_guard.py")):
+        sys.path.insert(0, _cand)
+        break
+
+try:
+    from tool_guard import run  # noqa: E402
+except ImportError as e:
+    sys.stderr.write(
+        f"{{TOOL}}-tool-guard: ❌ tool_guard engine not found ({{e}}).\\n"
+        "  Run scripts/tool-guard/install.sh to (re)install.\\n"
+    )
+    sys.exit(127)
+
+sys.exit(run(
+    tool_name=TOOL,
+    real_bin=REAL,
+    secret_flags=frozenset(),  # add per-tool secret flags here, e.g. {{"--token", "--password"}}
+))
+'''
+    stub_path = target_dir / "wrapper.py"
+    stub_path.write_text(stub)
+    stub_path.chmod(0o755)
+
+    policy = f'''# {name}-tool-guard policy — design notes
+
+The `.tool-guard/{name}.config.json` file controls what `{name}`
+invocations the tool-guard at `/usr/local/bin/{name}` allows or blocks.
+
+## Categories
+
+| Category | Effect |
+|----------|--------|
+| `allow` | Log + exec real binary. |
+| `warn`  | Stderr advisory + log + exec. |
+| `deny`  | Log + stderr error + exit 13. Real binary not called. |
+
+## Precedence
+
+`deny > warn > allow > defaultMode`. First match within each category
+wins.
+
+## How to test
+
+```bash
+{upper}_TG_DRYRUN=1 {name} <some-command>
+# → DRYRUN: classify=...
+```
+
+Or use `tg`:
+
+```bash
+tg check {name} <some-command>
+```
+
+## TODO
+
+- [ ] Document the safety rationale for each `deny` rule below
+- [ ] Add Newman / Postman / smoke tests for representative invocations
+'''
+    (target_dir / "POLICY.md").write_text(policy)
+
+    examples_dir = PKG_ROOT / "examples" / ".tool-guard"
+    examples_dir.mkdir(parents=True, exist_ok=True)
+    example_config = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "_comment": (
+            f"Starter policy for {name}. defaultMode='prompt' means an unmatched "
+            "call triggers an interactive prompt (TTY) or auto-deny (non-TTY). "
+            "Edit allow/warn/deny lists to match your team's needs. See "
+            f"../{name}/POLICY.md."
+        ),
+        "defaultMode": "prompt",
+        "allow": [
+            "version",
+            "--version",
+            "--help",
+            "-h",
+        ],
+        "warn": [],
+        "deny": [],
+    }
+    example_path = examples_dir / f"{name}.config.json"
+    example_path.write_text(json.dumps(example_config, indent=2) + "\n")
+
+    print(_green(f"✓ Created scaffold for new tool-guard '{name}'"))
+    print(f"  stub:    {stub_path}")
+    print(f"  policy:  {target_dir / 'POLICY.md'}")
+    print(f"  config:  {example_path}")
+    print()
+    print("Next steps:")
+    print(f"  1. Edit {example_path} — add allow/warn/deny rules for {name}")
+    print(f"  2. Copy to your repo: cp {example_path} <repo>/.tool-guard/")
+    print(f"  3. Add a smoke test at _tests/{name}.smoke.test.sh (template: az.smoke.test.sh)")
+    print(f"  4. Run: tg install {name}")
+    return 0
+
+
+def cmd_test(_args) -> int:
+    """Run all test suites under _tests/."""
+    tests_dir = PKG_ROOT / "_tests"
+    if not tests_dir.is_dir():
+        print(_red(f"tg: no _tests/ directory at {tests_dir}"), file=sys.stderr)
+        return 1
+    suites = sorted(tests_dir.glob("*.test.sh"))
+    if not suites:
+        print(_red(f"tg: no test suites found in {tests_dir}"), file=sys.stderr)
+        return 1
+    failed = 0
+    for s in suites:
+        print(_bold(f"\n── {s.name} ──"))
+        ec = subprocess.run(["bash", str(s)]).returncode
+        if ec != 0:
+            failed += 1
+            print(_red(f"  → FAILED (exit {ec})"))
+    print()
+    if failed:
+        print(_red(f"{failed}/{len(suites)} suite(s) failed"))
+        return 1
+    print(_green(f"All {len(suites)} suites passed"))
+    return 0
+
+
+def cmd_version(_args) -> int:
+    print(f"tool-guard {VERSION}")
+    print(f"  package:    {PKG_ROOT}")
+    print(f"  engine:     {_engine_installed() or _dim('not installed')}")
+    print(f"  tool-guard:   {', '.join(_discover_guards()) or _dim('none discovered')}")
+    return 0
+
+
+def cmd_help(args) -> int:
+    if args.command:
+        # Per-command help via argparse subparser
+        try:
+            sp = SUBPARSERS.choices[args.command]
+            sp.print_help()
+            return 0
+        except KeyError:
+            print(_red(f"tg: no such command '{args.command}'"), file=sys.stderr)
+            return 1
+    print(__doc__)
+    return 0
+
+
+# ─── argparse setup ───────────────────────────────────────────────────
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="tg",
+        description="tool-guard management CLI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("--version", action="version", version=f"tool-guard {VERSION}")
+    sp = p.add_subparsers(dest="cmd", metavar="<command>")
+
+    sp_list = sp.add_parser("list", help="list installed tool-guard")
+    sp_list.set_defaults(func=cmd_list)
+
+    sp_status = sp.add_parser("status", help="show install + config + log status")
+    sp_status.add_argument("tool", nargs="?", help="(optional) restrict to one tool")
+    sp_status.set_defaults(func=cmd_status)
+
+    sp_check = sp.add_parser("check", help="dry-run classify a command")
+    sp_check.add_argument("tool", help="tool-guard name (e.g. az, git)")
+    sp_check.add_argument("args", nargs=argparse.REMAINDER, help="argv to classify")
+    sp_check.set_defaults(func=cmd_check)
+
+    sp_install = sp.add_parser("install", help="install engine + named tool-guard")
+    sp_install.add_argument("names", nargs="*", help="tool-guard to install (default: all)")
+    sp_install.set_defaults(func=cmd_install)
+
+    sp_uninstall = sp.add_parser("uninstall", help="uninstall named tool-guard + engine")
+    sp_uninstall.add_argument("names", nargs="*", help="tool-guard to remove (default: all)")
+    sp_uninstall.set_defaults(func=cmd_uninstall)
+
+    sp_log = sp.add_parser("log", help="show last N log entries")
+    sp_log.add_argument("tool", help="tool-guard name")
+    sp_log.add_argument("-n", type=int, default=10, help="number of entries (default 10)")
+    sp_log.set_defaults(func=cmd_log)
+
+    sp_cfg = sp.add_parser("config", help="config inspection + maintenance")
+    sp_cfg_sub = sp_cfg.add_subparsers(dest="cfg_cmd", metavar="<subcommand>")
+
+    sp_cfg_show = sp_cfg_sub.add_parser("show", help="print merged effective config")
+    sp_cfg_show.add_argument("tool", help="tool-guard name")
+    sp_cfg_show.set_defaults(func=cmd_config_show)
+
+    sp_cfg_init = sp_cfg_sub.add_parser("init", help="initialize from example template")
+    sp_cfg_init.add_argument("tool", help="tool-guard name")
+    sp_cfg_init.add_argument("--force", action="store_true", help="overwrite if exists")
+    sp_cfg_init.set_defaults(func=cmd_config_init)
+
+    sp_cfg_edit = sp_cfg_sub.add_parser("edit", help="open config in $EDITOR")
+    sp_cfg_edit.add_argument("tool", help="tool-guard name")
+    sp_cfg_edit.add_argument("--local", action="store_true",
+                             help="edit the per-user .local.json file (gitignored)")
+    sp_cfg_edit.set_defaults(func=cmd_config_edit)
+
+    sp_cfg_validate = sp_cfg_sub.add_parser("validate", help="validate JSON + schema")
+    sp_cfg_validate.add_argument("tool", nargs="?", help="(optional) restrict to one tool")
+    sp_cfg_validate.set_defaults(func=cmd_config_validate)
+
+    sp_add = sp.add_parser("add", help="scaffold a new tool-guard")
+    sp_add.add_argument("tool", help="new tool-guard name (e.g. gh)")
+    sp_add.set_defaults(func=cmd_add)
+
+    sp_test = sp.add_parser("test", help="run all test suites")
+    sp_test.set_defaults(func=cmd_test)
+
+    sp_version = sp.add_parser("version", help="show version info")
+    sp_version.set_defaults(func=cmd_version)
+
+    sp_help = sp.add_parser("help", help="show help (optionally for a specific command)")
+    sp_help.add_argument("command", nargs="?", help="command to detail")
+    sp_help.set_defaults(func=cmd_help)
+
+    return p
+
+
+SUBPARSERS = None  # populated at parse time, used by cmd_help
+
+
+def main() -> int:
+    global SUBPARSERS
+    parser = _build_parser()
+    SUBPARSERS = parser._subparsers._group_actions[0]  # type: ignore  # for cmd_help
+
+    args = parser.parse_args()
+    if not args.cmd:
+        parser.print_help()
+        return 0
+    if args.cmd == "config" and not getattr(args, "cfg_cmd", None):
+        parser.parse_args(["config", "--help"])
+        return 1
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "_comment": "Cross-cutting deny / warn / allow rules applied by the tool-guard engine to ALL wrapped tools. Loaded after the per-tool config so per-tool rules match first; defaults serve as a backstop for anything not covered. No defaultMode here — that is per-tool. See scripts/tool-guard/README.md for schema details.",
+
+  "deny": [
+    {
+      "pattern": "* delete *",
+      "message": "Generic destructive '* delete *' is blocked by the global guard rails. If you really need this, add a more precise allow rule to .tool-guard/<tool>.config.json describing exactly what is being deleted and why."
+    },
+    {
+      "pattern": "* purge *",
+      "message": "Generic destructive '* purge *' is blocked by the global guard rails. Purge operations typically bypass soft-delete / recovery — be very explicit about which resource you mean."
+    },
+    {
+      "pattern": "* destroy *",
+      "message": "Generic destructive '* destroy *' is blocked by the global guard rails (covers e.g. 'terraform destroy', 'pulumi destroy')."
+    }
+  ]
+}

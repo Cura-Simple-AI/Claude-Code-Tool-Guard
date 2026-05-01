@@ -1,0 +1,21 @@
+# Per-user tool-guard policy overrides — populated by the prompt-mode 'save' actions
+.tool-guards/*.local.json
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Logs (runtime, ephemeral — usually under /tmp/tool-guard-logs/ but in case anyone redirects)
+*.jsonl

@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "_comment": "Shared, version-controlled git-tool-guard policy. Hard-deny push to main/master always; warn on destructive operations only when running under a Claude ancestor (claude_only:true). defaultMode='allow' — git is mostly safe, only specific dangerous patterns matter. See scripts/tool-guard/git/POLICY.md for design notes.",
+
+  "defaultMode": "allow",
+
+  "deny": [
+    {
+      "pattern": "push * main",
+      "message": "Push to main is blocked. main = PROD (project convention: 'Never commit directly to main'). Use a feature branch → PR → merge to develop. Force push would also rewrite production history — covered by this rule."
+    },
+    {
+      "pattern": "push * main *",
+      "message": "Push to main is blocked regardless of trailing flags. main = PROD. Use a feature branch → PR → merge to develop."
+    },
+    {
+      "pattern": "push main",
+      "message": "Push to main is blocked. main = PROD (project convention: 'Never commit directly to main'). Use a feature branch → PR → merge to develop."
+    },
+    {
+      "pattern": "push main *",
+      "message": "Push to main is blocked regardless of trailing flags. main = PROD."
+    },
+    {
+      "pattern": "push * master",
+      "message": "Push to master is blocked — master is the historical PROD branch. Use a feature branch → PR."
+    },
+    {
+      "pattern": "push * master *",
+      "message": "Push to master is blocked regardless of trailing flags."
+    },
+    {
+      "pattern": "push master",
+      "message": "Push to master is blocked — master is the historical PROD branch. Use a feature branch → PR."
+    },
+    {
+      "pattern": "push master *",
+      "message": "Push to master is blocked regardless of trailing flags."
+    }
+  ],
+
+  "warn": [
+    {
+      "pattern": "push --force *",
+      "claude_only": true,
+      "message": "Force push under Claude detected. Force push can overwrite other people's commits on the remote. Make sure no-one else has pushed to this branch since you last pulled. Prefer --force-with-lease over --force."
+    },
+    {
+      "pattern": "push --force-with-lease *",
+      "claude_only": true,
+      "message": "Force-with-lease under Claude detected. Safer than --force, but still rewrites history on the remote. Confirm the lease ref is current."
+    },
+    {
+      "pattern": "push --no-verify *",
+      "claude_only": true,
+      "message": "--no-verify on push bypasses pre-push hooks (CI checks, linting). Fix the underlying issue rather than skipping the hook."
+    },
+    {
+      "pattern": "commit --no-verify*",
+      "claude_only": true,
+      "message": "--no-verify on commit bypasses pre-commit hooks (linting, formatting). Fix the underlying issue rather than skipping the hook (project convention: 'Never skip hooks unless explicitly requested')."
+    },
+    {
+      "pattern": "commit -n *",
+      "claude_only": true,
+      "message": "-n is shorthand for --no-verify. Same warning applies — bypassing hooks hides errors."
+    },
+    {
+      "pattern": "reset --hard*",
+      "claude_only": true,
+      "message": "git reset --hard discards uncommitted changes permanently. Commit or stash first if you have anything you might want back."
+    },
+    {
+      "pattern": "checkout -- *",
+      "claude_only": true,
+      "message": "git checkout -- <files> discards uncommitted changes in those files permanently. Commit or stash first."
+    },
+    {
+      "pattern": "checkout --theirs *",
+      "claude_only": true,
+      "message": "Blind --theirs accepts the 'incoming' side of every conflict — context-dependent (during rebase 'theirs' = upstream; during merge 'theirs' = the merged branch). Resolve conflicts manually rather than blanket-accepting one side."
+    },
+    {
+      "pattern": "merge -X theirs *",
+      "claude_only": true,
+      "message": "merge -X theirs blindly accepts the merged branch's side at every conflict. Can silently overwrite your work. Resolve conflicts manually."
+    },
+    {
+      "pattern": "merge --strategy-option=theirs *",
+      "claude_only": true,
+      "message": "Same as -X theirs — blindly accepts incoming. Resolve conflicts manually."
+    },
+    {
+      "pattern": "rebase -i *",
+      "claude_only": true,
+      "message": "Interactive rebase requires editor input — Claude cannot interact with the rebase TODO file. Use a non-interactive rebase or do this manually."
+    }
+  ]
+}

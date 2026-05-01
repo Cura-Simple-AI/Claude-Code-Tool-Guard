@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "_comment": "Shared, version-controlled gh-tool-guard policy. defaultMode='allow' — gh is mostly safe (read-mostly + benign mutations like issue create / pr comment). Deny only the few credential-clearing and resource-deleting verbs; warn on PR-body autoclose keywords (which silently auto-close issues at merge time) and on claude-only sensitive mutations. Patterns are tightened to avoid false positives on hypothetical 'verb-suffix' commands. See scripts/tool-guard/gh/POLICY.md for design notes.",
+
+  "defaultMode": "allow",
+
+  "deny": [
+    {
+      "pattern": "auth logout",
+      "message": "auth logout would clear gh's credential cache. If you really mean it, run /usr/bin/gh auth logout directly. Otherwise: this likely fired by accident — check your command."
+    },
+    {
+      "pattern": "auth logout *",
+      "message": "auth logout (with flags) would clear gh's credential cache. If you really mean it, run /usr/bin/gh auth logout directly."
+    },
+    {
+      "pattern": "repo delete",
+      "message": "Deleting a GitHub repository is permanent and cascades to all forks, issues, PRs, and Actions. Almost never the right command from CLI — do it from the web UI where the action requires typing the repo name."
+    },
+    {
+      "pattern": "repo delete *",
+      "message": "Deleting a GitHub repository is permanent and cascades to all forks, issues, PRs, and Actions. Almost never the right command from CLI."
+    },
+    {
+      "pattern": "ssh-key delete",
+      "message": "Removing an SSH key revokes that key's git access. Coordinate with the key owner before removing."
+    },
+    {
+      "pattern": "ssh-key delete *",
+      "message": "Removing an SSH key revokes that key's git access. Coordinate first."
+    },
+    {
+      "pattern": "gpg-key delete",
+      "message": "Removing a GPG key invalidates signature verification on all commits signed with it."
+    },
+    {
+      "pattern": "gpg-key delete *",
+      "message": "Removing a GPG key invalidates signature verification on all commits signed with it."
+    },
+    {
+      "pattern": "secret delete",
+      "message": "Deleting a repository / org / environment secret can break running workflows that depend on it."
+    },
+    {
+      "pattern": "secret delete *",
+      "message": "Deleting a repository / org / environment secret can break running workflows that depend on it. Coordinate first."
+    },
+    {
+      "pattern": "variable delete",
+      "message": "Deleting an Actions variable can break running workflows."
+    },
+    {
+      "pattern": "variable delete *",
+      "message": "Deleting an Actions variable can break running workflows. Coordinate first."
+    },
+    {
+      "pattern": "release delete",
+      "message": "Deleting a release removes the asset uploads + the tag annotation. Users who pinned lose access."
+    },
+    {
+      "pattern": "release delete *",
+      "message": "Deleting a release removes the asset uploads + the tag annotation. Users who pinned lose access."
+    }
+  ],
+
+  "warn": [
+    {
+      "pattern": "pr merge*",
+      "claude_only": true,
+      "message": "pr merge under Claude — make sure the PR has been reviewed by a human and CI is green. Use --auto if you want GitHub to wait for required checks."
+    },
+    {
+      "pattern": "pr close*",
+      "claude_only": true,
+      "message": "pr close (without merging) abandons the work. Coordinate with the PR author."
+    },
+    {
+      "pattern": "issue close*",
+      "claude_only": true,
+      "message": "Closing an issue under Claude — make sure the work is actually done (or that this is intentional triage)."
+    },
+    {
+      "pattern": "release create*",
+      "claude_only": true,
+      "message": "Creating a release publishes a tag + asset bundle visible to all users. Make sure the version, notes, and target are correct."
+    },
+
+    {
+      "type": "regex",
+      "pattern": "(?i)^pr (create|edit)\\b.*?(--body[= ]|-b ).*?\\b(fix(es|ed)?|close[sd]?|resolve[sd]?) #\\d+",
+      "message": "PR body contains a GitHub auto-close keyword (fix/fixes/fixed/close/closes/closed/resolve/resolves/resolved) followed by #NNN. GitHub will auto-close the linked issue at merge time, regardless of whether the issue's DoD is met. Use 'Part of #NNN' or 'Addresses #NNN' instead if you don't want that side effect. Word-boundary aware (won't false-positive on 'prefixes #'). Scoped to 'pr create' and 'pr edit' (issue bodies / pr comments are exempt). Covers all three arg forms: --body value, --body=value, -b value."
+    }
+  ]
+}

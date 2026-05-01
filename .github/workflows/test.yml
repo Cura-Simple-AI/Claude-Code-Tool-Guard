@@ -1,0 +1,70 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Note for the parent-repo case: this workflow lives at
+# scripts/tool-guard/.github/workflows/test.yml inside the parent repo.
+# GitHub Actions only auto-discovers workflows at /.github/workflows/
+# at the repo root, so this file is dormant in the parent and only
+# activates after `git subtree split` extracts the package to its own
+# repository (see EXTRACT.md).
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Engine smoke
+        run: python3 -c "import sys; sys.path.insert(0, '.'); from tool_guard import run, classify, redact, derive_pattern; print('engine imports OK')"
+
+      - name: Engine test suite (91 tests)
+        run: bash _tests/tool_guard.test.sh
+
+      - name: az smoke tests (20 tests)
+        run: bash _tests/az.smoke.test.sh
+
+      - name: git smoke tests (34 tests)
+        run: bash _tests/git.smoke.test.sh
+
+      - name: sleep tests (22 tests)
+        run: bash _tests/sleep.test.sh
+
+  lint:
+    name: lint / py_compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: py_compile (syntax + import check)
+        run: |
+          python3 -m py_compile tool_guard.py
+          python3 -m py_compile az/wrapper.py
+          python3 -m py_compile git/wrapper.py
+          python3 -m py_compile sleep/wrapper.py
+      - name: ruff (if config present)
+        run: |
+          if [ -f pyproject.toml ] || [ -f .ruff.toml ] || [ -f ruff.toml ]; then
+            python3 -m pip install --quiet ruff
+            ruff check .
+          else
+            echo "no ruff config — skipping"
+          fi

@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "_comment": "Shared, version-controlled az-tool-guard policy. defaultMode='prompt' means an unmatched call triggers an interactive prompt (TTY) or auto-deny (non-TTY). Per-user overrides go in .tool-guard/az.config.local.json (gitignored, populated by the prompt's 'save' actions). Cross-cutting rules (e.g. * delete *, * purge *) live in .tool-guard/_defaults.json — only az-specific deny rules are listed here. Precedence: deny > warn > allow > defaultMode. See scripts/tool-guard/az/POLICY.md for design notes.",
+
+  "defaultMode": "prompt",
+
+  "allow": [
+    "version",
+    "--version",
+    "--help",
+    "-h",
+    "* --help",
+    "* -h",
+    "account get-access-token*",
+    "account show*",
+    "account list*",
+    "account list-locations*",
+    "boards work-item show*",
+    "boards work-item list*",
+    "boards work-item create*",
+    "boards work-item update*",
+    "boards iteration*",
+    "boards area*",
+    "boards query*",
+    "repos pr list*",
+    "repos pr show*",
+    "repos pr create*",
+    "repos pr update*",
+    "repos list*",
+    "repos show*",
+    "pipelines runs list*",
+    "pipelines runs show*",
+    "pipelines list*",
+    "pipelines show*",
+    "extension list*",
+    "extension show*",
+    "config get*",
+    "devops project list*",
+    "devops project show*",
+    "ad signed-in-user show*"
+  ],
+
+  "deny": [
+    {
+      "pattern": "logout*",
+      "message": "az logout would clear the credential cache used by the git credential helper for dev.azure.com — fetches and pushes against the org would start prompting. Run 'az account clear' explicitly only if you really intend to break the helper."
+    },
+    {
+      "pattern": "account clear*",
+      "message": "Same effect as 'az logout' — clears the credential cache used by git's HTTPS auth against dev.azure.com."
+    },
+    {
+      "pattern": "account set*",
+      "message": "Switching the active subscription silently changes which environment subsequent 'az' commands target. Be explicit by passing --subscription on each command instead."
+    },
+    {
+      "pattern": "config set*",
+      "message": "az config set persists changes to the global az config file. Prefer per-command flags (--output, --only-show-errors) so other tools aren't affected."
+    },
+    "extension remove*",
+    "extension add*",
+    {
+      "pattern": "ad sp delete*",
+      "message": "Deleting a service principal usually breaks production deployments using its credentials. Coordinate with the team and rotate dependent secrets before deletion."
+    },
+    "ad app delete*",
+    "ad user delete*",
+    "ad group delete*",
+    {
+      "pattern": "keyvault secret delete*",
+      "message": "Deleting a Key Vault secret can break running workloads. Soft-delete is enabled — recovery is possible within the retention window, but PURGE is not. Coordinate with the team."
+    },
+    "keyvault key delete*",
+    "keyvault certificate delete*",
+    {
+      "pattern": "keyvault secret purge*",
+      "message": "PURGE is irreversible — bypasses soft-delete entirely. Almost never the right command. If you must, do it from the Azure portal where the action is auditable."
+    },
+    {
+      "pattern": "group delete*",
+      "message": "Resource group deletion cascades to every resource inside it. This is the most blast-radius operation in Azure CLI. Verify the group name twice and confirm with the team."
+    },
+    "deployment delete*",
+    "deployment group delete*",
+    "deployment sub delete*",
+    "resource delete*",
+    {
+      "pattern": "pipelines runs cancel*",
+      "message": "Cancelling a pipeline run can leave deployments half-applied (some stages succeeded, others didn't). Prefer waiting for the run to finish, then rolling back via a follow-up commit."
+    },
+    {
+      "pattern": "repos pr update * --status abandoned*",
+      "message": "Abandoning a PR closes it without merging. Coordinate with the PR author before abandoning their work."
+    },
+    "repos pr update --status abandoned*"
+  ]
+}

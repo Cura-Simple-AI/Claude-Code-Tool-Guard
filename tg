@@ -450,8 +450,23 @@ def _validate_config_file(path: Path) -> list[str]:
                 issues.append(
                     f"'{category}'[{i}].message must be a string, got {type(rule['message']).__name__}"
                 )
+            # type field: must be "glob" or "regex" (default "glob")
+            if "type" in rule:
+                if rule["type"] not in ("glob", "regex"):
+                    issues.append(
+                        f"'{category}'[{i}].type must be 'glob' or 'regex', got {rule['type']!r}"
+                    )
+                elif rule["type"] == "regex" and isinstance(rule.get("pattern"), str):
+                    # Try to compile the regex; report syntax errors at validate time
+                    try:
+                        import re as _re
+                        _re.compile(rule["pattern"])
+                    except _re.error as e:
+                        issues.append(
+                            f"'{category}'[{i}].pattern is invalid regex: {e}"
+                        )
             # Warn about unknown keys (don't fail — schema is forward-compatible)
-            known = {"pattern", "message", "claude_only"}
+            known = {"pattern", "message", "claude_only", "type"}
             unknown = set(rule.keys()) - known
             if unknown:
                 issues.append(f"'{category}'[{i}] unknown key(s): {sorted(unknown)} (will be ignored)")

@@ -812,8 +812,20 @@ def cmd_install(args) -> int:
             print(_yellow(f"⚠  {name}: {installed_path} exists and is NOT our wrapper "
                           f"(looks like a real binary)."), file=sys.stderr)
             print(f"     Installing here would shadow it. Move it aside first:")
-            print(f"       sudo mv {installed_path} {installed_path}-real")
-            print(f"     Then re-run — REAL_BIN default will be patched to point at it.")
+            real_suffix_path = INSTALL_DIR / f"{name}-real"
+            if real_suffix_path.exists():
+                # P2 finding from DevOps review: don't blindly suggest
+                # `mv` if the destination already exists — would silently
+                # clobber whatever's there (could be a real binary from
+                # a prior aborted install attempt).
+                print(_yellow(f"     ⚠ {real_suffix_path} ALREADY EXISTS — inspect it first:"))
+                print(f"         file {real_suffix_path}")
+                print(f"         head -1 {real_suffix_path}")
+                print(f"       Then either rename the existing -real out of the way OR")
+                print(f"       set {name.upper().replace('-', '_')}_TG_REAL_BIN to a different path.")
+            else:
+                print(f"       sudo mv {installed_path} {installed_path}-real")
+                print(f"     Then re-run — REAL_BIN default will be patched to point at it.")
             skipped.append(name)
             continue
 

@@ -34,16 +34,25 @@ jobs:
       - name: Engine smoke
         run: python3 -c "import sys; sys.path.insert(0, '.'); from tool_guard import run, classify, redact, derive_pattern; print('engine imports OK')"
 
-      - name: Engine test suite (91 tests)
+      - name: Engine test suite (~157 tests)
         run: bash _tests/tool_guard.test.sh
 
-      - name: az smoke tests (20 tests)
+      - name: tg CLI test suite (~154 tests)
+        run: bash _tests/tg.test.sh
+
+      - name: install.sh / uninstall.sh / bootstrap test suite (~33 tests)
+        run: bash _tests/install.test.sh
+
+      - name: az smoke tests (~23 tests)
         run: bash _tests/az.smoke.test.sh
 
-      - name: git smoke tests (34 tests)
+      - name: gh smoke tests (~56 tests)
+        run: bash _tests/gh.smoke.test.sh
+
+      - name: git smoke tests (~34 tests)
         run: bash _tests/git.smoke.test.sh
 
-      - name: sleep tests (22 tests)
+      - name: sleep tests (~23 tests)
         run: bash _tests/sleep.test.sh
 
   lint:
@@ -57,7 +66,9 @@ jobs:
       - name: py_compile (syntax + import check)
         run: |
           python3 -m py_compile tool_guard.py
+          python3 -m py_compile tg
           python3 -m py_compile az/wrapper.py
+          python3 -m py_compile gh/wrapper.py
           python3 -m py_compile git/wrapper.py
           python3 -m py_compile sleep/wrapper.py
       - name: ruff (if config present)

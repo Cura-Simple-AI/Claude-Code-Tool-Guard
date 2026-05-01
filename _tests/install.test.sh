@@ -263,6 +263,148 @@ else
   rm -rf "$FIXTURE_WORKTREE" "$(dirname "$BOOTSTRAP_REMOTE")" \
          "$(dirname "$BOOTSTRAP_CACHE")" "$BOOTSTRAP_INSTALL" \
          "$BOOTSTRAP_ENGINE" "$CORRUPT_CACHE"
+
+  echo ""
+  echo "── bootstrap supply-chain hardening (Dan P0+P1) ──"
+  # Fixture: a tiny git repo with a known SHA we can pin to + verify
+  FIXTURE2_WT=$(mktemp -d)
+  cp -a "$PKG_ROOT"/. "$FIXTURE2_WT/"
+  ( cd "$FIXTURE2_WT" && git init -q -b main && git add -A \
+    && git -c user.email=test@example.com -c user.name=test commit -q -m "fixture-v1" ) >/dev/null 2>&1
+  FIXTURE2_SHA=$( cd "$FIXTURE2_WT" && git rev-parse HEAD )
+  FIXTURE2_BARE=$(mktemp -d)/bare.git
+  git clone --bare --quiet "$FIXTURE2_WT" "$FIXTURE2_BARE" 2>&1 | grep -v "^$" || true
+
+  # Test: TOOL_GUARD_EXPECTED_SHA matches → install proceeds
+  CACHE2=$(mktemp -d)/cache
+  INSTALL2=$(mktemp -d); ENGINE2=$(mktemp -d)
+  out=$(TOOL_GUARD_REPO_URL="$FIXTURE2_BARE" \
+        TOOL_GUARD_CACHE_DIR="$CACHE2" \
+        TOOL_GUARD_EXPECTED_SHA="$FIXTURE2_SHA" \
+        TG_INSTALL_DIR="$INSTALL2" \
+        TG_ENGINE_DIR="$ENGINE2" \
+        bash "$BOOTSTRAP_SH" az 2>&1)
+  ec=$?
+  assert_eq "EXPECTED_SHA matches → install proceeds" "0" "$ec"
+  assert_contains "EXPECTED_SHA verified message" "SHA verified" "$out"
+  rm -rf "$(dirname "$CACHE2")" "$INSTALL2" "$ENGINE2"
+
+  # Test: TOOL_GUARD_EXPECTED_SHA does NOT match → install refused
+  CACHE3=$(mktemp -d)/cache
+  INSTALL3=$(mktemp -d); ENGINE3=$(mktemp -d)
+  out=$(TOOL_GUARD_REPO_URL="$FIXTURE2_BARE" \
+        TOOL_GUARD_CACHE_DIR="$CACHE3" \
+        TOOL_GUARD_EXPECTED_SHA="0000000000000000000000000000000000000000" \
+        TG_INSTALL_DIR="$INSTALL3" \
+        TG_ENGINE_DIR="$ENGINE3" \
+        bash "$BOOTSTRAP_SH" az 2>&1)
+  ec=$?
+  if [[ $ec -ne 0 ]]; then
+    pass "EXPECTED_SHA mismatch → install refused"
+  else
+    fail "EXPECTED_SHA mismatch should refuse" "exit was 0"
+  fi
+  assert_contains "SHA mismatch message" "SHA verification failed" "$out"
+  # Most important: az should NOT have been installed
+  [[ -x "$INSTALL3/az" ]] && fail "az installed despite SHA mismatch" || pass "az NOT installed on SHA mismatch"
+  rm -rf "$(dirname "$CACHE3")" "$INSTALL3" "$ENGINE3"
+
+  # Test: corrupt .git/ (exists but empty dir) is caught with clear msg
+  CORRUPT2=$(mktemp -d)
+  mkdir -p "$CORRUPT2/.git"  # exists but empty → not a real git repo
+  out=$(TOOL_GUARD_REPO_URL="$FIXTURE2_BARE" \
+        TOOL_GUARD_CACHE_DIR="$CORRUPT2" \
+        TG_INSTALL_DIR=$(mktemp -d) \
+        TG_ENGINE_DIR=$(mktemp -d) \
+        bash "$BOOTSTRAP_SH" az 2>&1)
+  ec=$?
+  if [[ $ec -ne 0 ]]; then
+    pass "partial-clone .git/ (empty dir) is caught"
+  else
+    fail "partial-clone .git/ should be caught" "exit was 0"
+  fi
+  assert_contains "partial-clone error has remediation hint" "rm -rf" "$out"
+  rm -rf "$CORRUPT2" "$FIXTURE2_WT" "$(dirname "$FIXTURE2_BARE")"
+fi
+
+# ─── Pre-install PATH check (Dan P1) ────────────────────────────────
+echo ""
+echo "── install.sh pre-install PATH check ──"
+# When TG_INSTALL_DIR is unset, install.sh must verify PATH order
+# BEFORE installing stubs. Hard to test with the real PATH in CI;
+# verify the early-exit path by setting TG_INSTALL_DIR=/dev/null/x
+# (a path guaranteed not to be in PATH). Without TG_INSTALL_DIR, we
+# can also verify the post-install confirmation still works.
+INSTALL_TMP=$(mktemp -d)
+ENGINE_TMP=$(mktemp -d)
+# With override → PATH check skipped, install succeeds even though
+# the temp dir isn't on $PATH.
+out=$(TG_INSTALL_DIR="$INSTALL_TMP" TG_ENGINE_DIR="$ENGINE_TMP" \
+      bash "$INSTALL_SH" az 2>&1)
+ec=$?
+assert_eq "install with TG_INSTALL_DIR override skips PATH check" "0" "$ec"
+[[ -x "$INSTALL_TMP/az" ]] && pass "stub installed under override (no PATH check)" || fail "stub missing"
+rm -rf "$INSTALL_TMP" "$ENGINE_TMP"
+
+# ─── publish.sh guards (Dan P0) ─────────────────────────────────────
+echo ""
+echo "── publish.sh wrong-branch + dirty-tree guards ──"
+PUBLISH_SH="$(cd "$PKG_ROOT/.." && pwd)/tool-guard-publish.sh"
+if [[ ! -f "$PUBLISH_SH" ]]; then
+  echo "  (skipped — publish.sh not in this checkout)"
+else
+  # Build a fake git repo + copy publish.sh into it so REPO_ROOT
+  # resolves to the sandbox (publish.sh cd's to its own parent dir).
+  PUB_TMP=$(mktemp -d)
+  mkdir -p "$PUB_TMP/scripts/tool-guard"
+  cp "$PUBLISH_SH" "$PUB_TMP/scripts/tool-guard-publish.sh"
+  chmod +x "$PUB_TMP/scripts/tool-guard-publish.sh"
+  echo "test" > "$PUB_TMP/scripts/tool-guard/file.txt"
+  ( cd "$PUB_TMP" && git init -q -b main \
+    && git -c user.email=test@example.com -c user.name=test commit --allow-empty -q -m "init" \
+    && git add -A \
+    && git -c user.email=test@example.com -c user.name=test commit -q -m "subtree content" \
+    && git remote add cctg "https://github.com/Cura-Simple-AI/Claude-Code-Tool-Guard.git" \
+    ) >/dev/null 2>&1
+  PUB_SH_LOCAL="$PUB_TMP/scripts/tool-guard-publish.sh"
+
+  # Test 1: wrong branch → refused
+  ( cd "$PUB_TMP" && git checkout -q -b feature-wip ) >/dev/null 2>&1
+  out=$(bash "$PUB_SH_LOCAL" 2>&1)
+  ec=$?
+  assert_eq "publish from non-main → exit 1" "1" "$ec"
+  assert_contains "publish wrong-branch error" "Refusing to publish from branch" "$out"
+
+  # Test 2: TG_PUBLISH_BRANCHES override → allowed
+  echo "uncommitted" > "$PUB_TMP/scripts/tool-guard/uncommitted.txt"
+  out=$(TG_PUBLISH_BRANCHES="feature-wip" bash "$PUB_SH_LOCAL" 2>&1)
+  ec=$?
+  # Should NOT fail on branch but WILL fail on dirty tree
+  if echo "$out" | grep -qF "Refusing to publish from branch"; then
+    fail "publish branch override didn't allow feature-wip" "$out"
+  else
+    pass "TG_PUBLISH_BRANCHES override allows non-main"
+  fi
+
+  # Test 3: dirty tree → refused (continues from above with uncommitted file)
+  if [[ $ec -ne 0 ]] && echo "$out" | grep -qF "Uncommitted changes"; then
+    pass "publish dirty-tree → refused"
+  else
+    fail "publish dirty-tree should refuse" "ec=$ec out=$(echo "$out" | head -3)"
+  fi
+
+  # Test 4: clean tree on allowed branch → guards pass (push fails on
+  # fake remote URL, but guards shouldn't have fired)
+  ( cd "$PUB_TMP" && git add -A \
+    && git -c user.email=test@example.com -c user.name=test commit -q -m "commit uncommitted" ) >/dev/null 2>&1
+  out=$(TG_PUBLISH_BRANCHES="feature-wip" bash "$PUB_SH_LOCAL" 2>&1)
+  if echo "$out" | grep -qF "Refusing to publish from branch" \
+     || echo "$out" | grep -qF "Uncommitted changes"; then
+    fail "publish guards still firing after fix" "$out"
+  else
+    pass "publish guards pass when branch + tree are clean"
+  fi
+  rm -rf "$PUB_TMP"
 fi
 
 # ─── Result ──────────────────────────────────────────────────────────

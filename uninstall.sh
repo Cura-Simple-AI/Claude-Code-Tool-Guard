@@ -105,8 +105,12 @@ Tool-guards uninstalled: ${TARGETS[*]}
 $( $REMOVE_ENGINE && echo "Engine uninstalled:    $ENGINE_DIR" )
 
 Preserved (manual cleanup if you want to wipe):
-  Local configs: <repo>/.tool-guard/<name>.config.local.json (gitignored)
-  Logs:          /tmp/tool-guard/<name>_*.log  (OS clears /tmp on reboot anyway)
+  Local configs:   <repo>/.tool-guard/<name>.config.local.json (gitignored)
+  Logs:            /tmp/tool-guard/<name>_*.log  (OS clears /tmp on reboot anyway)
+  Bootstrap cache: ~/.local/share/tool-guard-source/  (full source clone)
+  Home symlink:    ~/.config/tool-guard  (if you set one up — check with: ls -la ~/.config/tool-guard)
+
+To purge everything: rm -rf ~/.local/share/tool-guard-source/ ~/.config/tool-guard /tmp/tool-guard/
 
 Re-install: bash $SCRIPT_DIR/install.sh
 ────────────────────────────────────────────────────────────

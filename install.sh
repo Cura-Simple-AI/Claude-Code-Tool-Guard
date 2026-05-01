@@ -48,6 +48,16 @@ if [ -w "$INSTALL_DIR" ] || { [ ! -e "$INSTALL_DIR" ] && [ -w "$(dirname "$INSTA
   SUDO=""
 else
   SUDO="sudo"
+  # Pro-actively check sudo is available + non-interactive — fail fast
+  # with a helpful message rather than hanging on a sudo password
+  # prompt in non-TTY contexts (CI, devcontainers without sudo).
+  if ! command -v sudo >/dev/null 2>&1; then
+    echo "❌ sudo is required to write to $INSTALL_DIR but is not installed." >&2
+    echo "   Either: install sudo, run as root, or set TG_INSTALL_DIR to a user-writable path." >&2
+    echo "   Example: TG_INSTALL_DIR=\$HOME/.local/bin TG_ENGINE_DIR=\$HOME/.local/lib/tool-guard \\" >&2
+    echo "             bash $(basename "${BASH_SOURCE[0]}")" >&2
+    exit 1
+  fi
 fi
 
 err()  { echo "❌ $*" >&2; exit 1; }
@@ -55,6 +65,30 @@ info() { echo "→  $*"; }
 ok()   { echo "✅ $*"; }
 
 [ -f "$ENGINE_SRC" ] || err "Engine not found at $ENGINE_SRC"
+
+# Pre-flight PATH check (P1 finding): verify INSTALL_DIR is on PATH +
+# positioned before /usr/bin (or any other dir that could contain a
+# real binary). Done BEFORE stub install so a PATH misconfig doesn't
+# leave stubs on disk that the wrapper user doesn't know about.
+# Skipped under TG_INSTALL_DIR override (test sandbox).
+if [ -z "${TG_INSTALL_DIR:-}" ]; then
+  case ":$PATH:" in
+    *":$INSTALL_DIR:"*) : ;;
+    *)
+      err "PATH check (pre-install): $INSTALL_DIR is not in PATH.
+           Add it to your shell rc and re-run, or set TG_INSTALL_DIR to a path that is in PATH."
+      ;;
+  esac
+  # Compute index of $INSTALL_DIR + /usr/bin in $PATH; INSTALL_DIR must come first.
+  pre_install_idx=$(printf '%s' "$PATH" | tr ':' '\n' | grep -nxF "$INSTALL_DIR" | head -1 | cut -d: -f1)
+  pre_usrbin_idx=$(printf '%s' "$PATH" | tr ':' '\n' | grep -nxF "/usr/bin" | head -1 | cut -d: -f1)
+  if [ -n "$pre_install_idx" ] && [ -n "$pre_usrbin_idx" ] \
+     && [ "$pre_install_idx" -gt "$pre_usrbin_idx" ]; then
+    err "PATH check (pre-install): $INSTALL_DIR (position $pre_install_idx) is AFTER /usr/bin (position $pre_usrbin_idx).
+         Reorder your PATH so $INSTALL_DIR comes first, then re-run.
+         Refusing to install — guards would be silently shadowed by real binaries."
+  fi
+fi
 
 # Install the `tg` management CLI to /usr/local/bin/tg (always — it's not
 # a per-tool tool-guard but a top-level utility that ships alongside the engine).
@@ -119,18 +153,19 @@ for name in "${TARGETS[@]}"; do
   ok "$name → $dst"
 done
 
-# Verify PATH order: install dir must precede the real binary location.
-# Skipped when TG_INSTALL_DIR override is set (typically a test sandbox
-# that isn't on PATH and doesn't need to be).
+# Post-install confirmation — `command -v` (which is shell built-in
+# and respects current PATH) should now resolve to our stub. The
+# pre-install PATH check above already ensured the order is right;
+# this is a final sanity check that nothing weird happened.
 if [ -z "${TG_INSTALL_DIR:-}" ]; then
   echo
   for name in "${TARGETS[@]}"; do
     resolved="$(command -v "$name" 2>/dev/null || true)"
     if [ "$resolved" = "$INSTALL_DIR/$name" ]; then
-      ok "PATH OK: which $name → $resolved"
+      ok "PATH OK: command -v $name → $resolved"
     else
-      err "PATH check failed for $name: 'which $name' returns '$resolved' instead of $INSTALL_DIR/$name.
-           Check your PATH order — $INSTALL_DIR must come before /usr/bin."
+      err "Post-install PATH check failed for $name: 'command -v $name' returns '$resolved' instead of $INSTALL_DIR/$name.
+           This is unexpected — pre-install check passed. Inspect manually."
     fi
   done
 fi
